@@ -1,0 +1,55 @@
+# Running nanofaas itself in a container.
+#
+# ## Read this before using it
+#
+# The control plane needs to create containers, so it needs the Docker socket.
+# Mounting `/var/run/docker.sock` into a container gives that container the
+# ability to start any other container with any options -- including one that
+# mounts the host filesystem as root. **It is equivalent to giving the
+# container root on the host.** Every "run Docker in Docker" tutorial does
+# this and most of them do not say so.
+#
+# That is an acceptable trade on a machine you own, running functions you
+# wrote. It is not acceptable for a multi-tenant service, and no amount of
+# configuration in this file makes it so: the function containers themselves
+# are hardened, but the control plane's socket access is the boundary that
+# matters and it is wide open by design.
+#
+# The honest alternatives, in order of effort:
+#   * run the control plane directly on the host (`uvicorn ...`), which is
+#     what the README's quickstart does -- same privileges, one fewer layer
+#     pretending otherwise
+#   * put the daemon behind a socket proxy that only permits the container
+#     and image calls this platform makes
+#   * give each tenant a VM boundary -- Firecracker or gVisor -- which is what
+#     a real FaaS does and is out of scope here
+#
+# ## Why there is no Render blueprint
+#
+# The other projects in this series deploy to Render's free tier. This one
+# cannot: a managed container platform does not hand you its Docker daemon,
+# which is the one thing this platform is made of. Shipping a render.yaml that
+# started and then failed every invocation would be worse than not shipping
+# one.
+services:
+  nanofaas:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    ports:
+      # Loopback only: the control plane can deploy and run arbitrary code,
+      # so it is not something to expose on an interface by accident.
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      # The function registry, so a restart is not a wipe.
+      - nanofaas-data:/app/data
+    environment:
+      NANOFAAS_ROOT: /app
+      # Two concurrent container starts: see the stampede study in the README
+      # for why this is a tunable rather than a default to be smug about.
+      NANOFAAS_MAX_CONCURRENT_STARTS: "2"
+    restart: unless-stopped
+
+volumes:
+  nanofaas-data:
