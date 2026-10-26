@@ -78,6 +78,13 @@ class Shim(BaseHTTPRequestHandler):
         return
 
     protocol_version = "HTTP/1.1"
+    # TCP_NODELAY on the connection. Without it the kernel holds the small
+    # second write of a response waiting for an ACK the client is itself
+    # delaying, and every invocation pays a flat penalty for nothing. The
+    # giveaway was that the cost was identical on every call regardless of
+    # what the handler did: 48ms per warm invocation before, 3.8ms after,
+    # for a handler whose own execution time is 0.007ms.
+    disable_nagle_algorithm = True
 
     def _send(self, status: int, payload: dict) -> None:
         body = json.dumps(payload).encode("utf-8")

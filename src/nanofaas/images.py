@@ -100,6 +100,31 @@ class BuildResult:
     logs: str = ""
 
 
+def shim_bytes(runtime: str) -> bytes:
+    suffix = "py" if runtime == "python" else "js"
+    return (SHIMS / f"{runtime}_shim.{suffix}").read_bytes()
+
+
+def image_digest(spec: FunctionSpec) -> str:
+    """What the built image depends on: the handler *and* the shim.
+
+    The spec's own digest covers only the function's source, which was a bug
+    with teeth: editing the shim left every existing image "cached" against
+    an unchanged handler digest, so the fix never reached a container and the
+    platform went on serving the old shim while reporting a successful
+    deploy. The image's identity has to include everything the image is built
+    from, and the Dockerfile is in here for the same reason.
+    """
+    import hashlib
+
+    material = hashlib.blake2b(digest_size=8)
+    material.update(spec.digest().encode("utf-8"))
+    material.update(shim_bytes(spec.runtime))
+    material.update(DOCKERFILES[spec.runtime].encode("utf-8"))
+    material.update(BASE_IMAGES[spec.runtime].encode("utf-8"))
+    return material.hexdigest()
+
+
 def _tar_context(spec: FunctionSpec) -> io.BytesIO:
     """Build the build context in memory.
 
@@ -108,7 +133,7 @@ def _tar_context(spec: FunctionSpec) -> io.BytesIO:
     (permissions, cleanup on crash) for nothing.
     """
     shim_name = "shim.py" if spec.runtime == "python" else "shim.js"
-    shim_source = (SHIMS / f"{spec.runtime}_shim{Path(shim_name).suffix}").read_bytes()
+    shim_source = shim_bytes(spec.runtime)
     dockerfile = DOCKERFILES[spec.runtime].format(base=BASE_IMAGES[spec.runtime])
 
     buffer = io.BytesIO()
@@ -143,7 +168,7 @@ def build_image(client, spec: FunctionSpec, *, pull: bool = False) -> BuildResul
     # reports success and nothing changed.
     if existing is not None:
         labels = existing.labels or {}
-        if labels.get("nanofaas.digest") == spec.digest():
+        if labels.get("nanofaas.digest") == image_digest(spec):
             return BuildResult(
                 tag=tag,
                 build_ms=(time.perf_counter() - started) * 1000.0,
@@ -160,7 +185,7 @@ def build_image(client, spec: FunctionSpec, *, pull: bool = False) -> BuildResul
         pull=pull,
         labels={
             "nanofaas.function": spec.name,
-            "nanofaas.digest": spec.digest(),
+            "nanofaas.digest": image_digest(spec),
             "nanofaas.runtime": spec.runtime,
         },
     )
