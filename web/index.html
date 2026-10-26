@@ -1,0 +1,672 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nanofaas</title>
+<style>
+  :root {
+    --bg: #0c0f13; --panel: #141922; --panel-2: #1b2230; --line: #262f3d;
+    --ink: #e9eff6; --muted: #8c9cb0; --dim: #5a6b80;
+    --cold: #ff9f45; --warm: #45d1a0; --accent: #5aa9ff; --bad: #ff5f78;
+    --mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
+    --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.55 var(--sans); }
+  header { border-bottom: 1px solid var(--line); padding: 18px 26px; display: flex; gap: 18px; align-items: baseline; flex-wrap: wrap; }
+  header h1 { margin: 0; font: 600 20px/1 var(--mono); flex: none; }
+  header p { margin: 0; color: var(--muted); font-size: 13.5px; flex: 1 1 40ch; max-width: 92ch; }
+  main { padding: 20px 26px 60px; max-width: 1320px; }
+  section { margin-bottom: 24px; }
+  h2 { font: 600 12px/1 var(--sans); letter-spacing: .09em; text-transform: uppercase; color: var(--dim); margin: 0 0 10px; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px; }
+  .two { display: grid; gap: 15px; grid-template-columns: 1fr 1fr; }
+  .three { display: grid; gap: 15px; grid-template-columns: 1.1fr 1fr 1fr; }
+  @media (max-width: 1000px) { .two, .three { grid-template-columns: 1fr; } }
+  label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 5px; }
+  select, input, textarea {
+    width: 100%; background: var(--panel-2); color: var(--ink); border: 1px solid var(--line);
+    border-radius: 6px; padding: 8px 9px; font: 13px var(--mono);
+  }
+  textarea { min-height: 150px; resize: vertical; line-height: 1.45; }
+  .row { display: flex; gap: 12px; align-items: end; flex-wrap: wrap; }
+  .row > div { flex: 1 1 110px; }
+  button { background: var(--accent); color: #05121f; border: 0; border-radius: 6px; padding: 9px 16px; font: 600 13.5px var(--sans); cursor: pointer; }
+  button.ghost { background: transparent; color: var(--muted); border: 1px solid var(--line); }
+  button:disabled { opacity: .55; cursor: progress; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { text-align: left; font: 600 11px/1 var(--sans); letter-spacing: .06em; text-transform: uppercase; color: var(--dim); padding: 0 8px 7px; border-bottom: 1px solid var(--line); }
+  td { padding: 6px 8px; border-bottom: 1px solid rgba(38,47,61,.55); font-family: var(--mono); font-size: 12.5px; }
+  td.name { font-family: var(--sans); font-size: 13px; }
+  .num { text-align: right; }
+  tr.selected td { background: rgba(90,169,255,.1); }
+  tr.selected td.name { color: var(--accent); font-weight: 600; }
+  .stats { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(118px, 1fr)); }
+  .stat { background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 9px 11px; }
+  .stat b { display: block; font: 600 17px/1.25 var(--mono); }
+  .stat span { font-size: 11px; color: var(--muted); }
+  .pill { font: 11px var(--mono); border-radius: 99px; padding: 2px 8px; border: 1px solid var(--line); color: var(--muted); }
+  .pill.cold { color: var(--cold); border-color: rgba(255,159,69,.45); background: rgba(255,159,69,.1); }
+  .pill.warm { color: var(--warm); border-color: rgba(69,209,160,.45); background: rgba(69,209,160,.1); }
+  .pill.bad { color: var(--bad); border-color: rgba(255,95,120,.45); background: rgba(255,95,120,.1); }
+  .note { color: var(--muted); font-size: 12.5px; margin: 9px 0 0; max-width: 80ch; }
+  .note code { background: var(--panel-2); padding: 1px 5px; border-radius: 4px; }
+  .err { color: var(--bad); font-family: var(--mono); font-size: 12.5px; white-space: pre-wrap; }
+  svg { width: 100%; height: auto; display: block; }
+  .axlabel { fill: var(--dim); font: 10px var(--mono); }
+  .legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 11.5px; color: var(--muted); margin-top: 8px; }
+  .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
+  pre.out { background: var(--panel-2); border: 1px solid var(--line); border-radius: 6px; padding: 10px; font: 12px var(--mono); overflow-x: auto; margin: 10px 0 0; max-height: 220px; }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>nanofaas</h1>
+  <p>
+    A scale-to-zero function platform. Each function runs in its own container
+    with hard memory, CPU and capability limits; idle containers are stopped;
+    the next request pays a cold start. The platform measures that tax and
+    recommends the idle timeout your own traffic argues for.
+  </p>
+</header>
+
+<main>
+  <section>
+    <h2>Platform</h2>
+    <div class="panel">
+      <div class="stats" id="platform"></div>
+      <p class="note" id="platformnote"></p>
+    </div>
+  </section>
+
+  <section>
+    <div class="two">
+      <div class="panel">
+        <h2 style="margin-top:0">Deploy a function</h2>
+        <div class="row" style="margin-bottom:10px">
+          <div style="flex:2 1 150px"><label for="name">Name</label><input id="name" value="hello"></div>
+          <div><label for="example">Start from</label><select id="example"></select></div>
+        </div>
+        <label for="source">Handler</label>
+        <textarea id="source" spellcheck="false"></textarea>
+        <div class="row" style="margin-top:10px">
+          <div><label for="memory_mb">Memory MB</label><input id="memory_mb" type="number" value="128" min="32" max="1024" step="32"></div>
+          <div><label for="cpus">CPUs</label><input id="cpus" type="number" value="0.5" min="0.1" max="2" step="0.1"></div>
+          <div><label for="concurrency">Concurrency</label><input id="concurrency" type="number" value="1" min="1" max="64"></div>
+          <div><label for="max_instances">Max instances</label><input id="max_instances" type="number" value="4" min="1" max="20"></div>
+          <div><label for="idle_timeout_s">Idle timeout s</label><input id="idle_timeout_s" type="number" value="30" min="0" max="3600"></div>
+          <div style="flex:0 0 auto"><button id="deploy">Deploy</button></div>
+        </div>
+        <pre class="out" id="deployout" hidden></pre>
+      </div>
+
+      <div class="panel">
+        <h2 style="margin-top:0">Invoke</h2>
+        <div class="row">
+          <div style="flex:2 1 160px"><label for="target">Function</label><select id="target"></select></div>
+          <div style="flex:3 1 200px"><label for="event">Event (JSON)</label><input id="event" value='{"name": "world"}'></div>
+          <div style="flex:0 0 auto"><button id="invoke">Invoke</button></div>
+          <div style="flex:0 0 auto"><button id="burst" class="ghost">Burst &times;10</button></div>
+          <div style="flex:0 0 auto"><button id="zero" class="ghost">Scale to zero</button></div>
+        </div>
+        <pre class="out" id="invokeout" hidden></pre>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="three">
+      <div class="panel">
+        <h2 style="margin-top:0">Functions</h2>
+        <table id="functions"></table>
+      </div>
+      <div class="panel">
+        <h2 style="margin-top:0">Live containers</h2>
+        <table id="instances"></table>
+        <p class="note" id="instancenote"></p>
+      </div>
+      <div class="panel">
+        <h2 style="margin-top:0">Recent invocations</h2>
+        <table id="recent"></table>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="two">
+      <div class="panel">
+        <h2 style="margin-top:0">Latency: two populations</h2>
+        <div id="hist"></div>
+        <div class="legend">
+          <span><i style="background:var(--cold)"></i>cold (container started)</span>
+          <span><i style="background:var(--warm)"></i>warm (container reused)</span>
+        </div>
+        <p class="note" id="histnote"></p>
+      </div>
+      <div class="panel">
+        <h2 style="margin-top:0">What idle timeout should this function use?</h2>
+        <div class="row" style="margin-bottom:10px">
+          <div><label for="targetrate">Target cold-start rate</label><input id="targetrate" type="number" value="5" min="1" max="50" step="1"></div>
+          <div style="flex:0 0 auto"><button id="advise" class="ghost">Recommend</button></div>
+        </div>
+        <table id="policy"></table>
+        <p class="note" id="policynote">Invoke a function a few times, then ask. A recommendation from four requests is a recommendation about noise.</p>
+      </div>
+    </div>
+  </section>
+</main>
+
+<script>
+"use strict";
+
+/* ------------------------------------------------------------------ *
+ * Pure helpers, DOM-free, so scripts/check_console.mjs can run them in
+ * a Node vm. These are the functions that turn platform numbers into
+ * claims, which is where a console quietly lies.
+ * ------------------------------------------------------------------ */
+
+const N = {};
+
+N.fmtMs = function (ms) {
+  if (ms === null || ms === undefined || Number.isNaN(ms)) return "--";
+  if (ms >= 1000) return (ms / 1000).toFixed(2) + "s";
+  if (ms >= 10) return Math.round(ms) + "ms";
+  return ms.toFixed(1) + "ms";
+};
+
+N.fmtPct = function (x, digits) {
+  if (x === null || x === undefined || Number.isNaN(x)) return "--";
+  return (x * 100).toFixed(digits === undefined ? 1 : digits) + "%";
+};
+
+N.fmtAge = function (s) {
+  if (s === null || s === undefined) return "--";
+  if (s < 60) return s.toFixed(0) + "s";
+  if (s < 3600) return (s / 60).toFixed(1) + "m";
+  return (s / 3600).toFixed(1) + "h";
+};
+
+N.platformTiles = function (health) {
+  const pool = health.pool || {};
+  const functions = pool.functions || {};
+  const names = Object.keys(functions);
+  const instances = names.reduce(function (t, n) { return t + functions[n].instances; }, 0);
+  const inFlight = names.reduce(function (t, n) { return t + functions[n].in_flight; }, 0);
+  return [
+    { label: "docker", value: health.docker ? "connected" : "unavailable" },
+    { label: "functions deployed", value: String(health.functions) },
+    { label: "containers running", value: String(instances) },
+    { label: "requests in flight", value: String(inFlight) },
+    { label: "starting now", value: String(pool.starting_now === undefined ? 0 : pool.starting_now) },
+    { label: "max concurrent starts", value: String(pool.max_concurrent_starts === undefined ? "--" : pool.max_concurrent_starts) },
+  ];
+};
+
+N.platformNote = function (health) {
+  if (!health.docker) {
+    return "The control plane is up and the data plane is not: " +
+      (health.error || "Docker is unreachable") +
+      " Functions can be listed but not deployed or invoked.";
+  }
+  const pool = health.pool || {};
+  const functions = pool.functions || {};
+  const zero = Object.keys(functions).filter(function (n) { return functions[n].instances === 0; });
+  if (!Object.keys(functions).length) {
+    return "No function has been invoked yet, so nothing is running. That is " +
+      "what scale to zero looks like when it is working.";
+  }
+  if (zero.length) {
+    return zero.length + " of " + Object.keys(functions).length +
+      " functions are at zero containers; their next request pays a cold start.";
+  }
+  return "Every invoked function currently has at least one warm container.";
+};
+
+/** One row per function, with its live container count. */
+N.functionRows = function (functions) {
+  return (functions || []).map(function (f) {
+    const live = f.live || {};
+    const m = f.metrics || {};
+    return {
+      name: f.name,
+      memory_mb: f.memory_mb,
+      idle_timeout_s: f.idle_timeout_s,
+      instances: live.instances === undefined ? 0 : live.instances,
+      max_instances: f.max_instances,
+      invocations: m.invocations || 0,
+      coldRate: m.cold_start_rate === undefined ? null : m.cold_start_rate,
+      warmP50: (m.warm_ms && m.warm_ms.p50) || null,
+      coldP50: (m.cold_ms && m.cold_ms.p50) || null,
+    };
+  });
+};
+
+N.instanceRows = function (instances) {
+  return (instances || []).map(function (i) {
+    return {
+      name: i.name.split("-").slice(-2).join("-"),
+      function: i.function,
+      age: i.age_s,
+      idle: i.idle_s,
+      invocations: i.invocations,
+      inFlight: i.in_flight,
+      coldStartMs: (i.cold_start && i.cold_start.total_ms) || 0,
+      poisoned: Boolean(i.poisoned),
+    };
+  });
+};
+
+N.instanceNote = function (instances, functions) {
+  if (!instances || !instances.length) {
+    return "Nothing is running. Every function is at zero, and the next " +
+      "request to any of them starts a container.";
+  }
+  const soonest = instances
+    .map(function (i) {
+      const f = (functions || []).find(function (x) { return x.name === i.function; });
+      const timeout = f ? f.idle_timeout_s : null;
+      return timeout === null ? null : { name: i.function, left: timeout - i.idle_s };
+    })
+    .filter(Boolean)
+    .sort(function (a, b) { return a.left - b.left; })[0];
+  let note = instances.length + " container" + (instances.length === 1 ? "" : "s") + " running.";
+  if (soonest) {
+    note += soonest.left <= 0
+      ? " " + soonest.name + " is past its idle timeout and is about to be stopped."
+      : " " + soonest.name + " stops in " + soonest.left.toFixed(0) + "s unless it gets another request.";
+  }
+  return note;
+};
+
+N.recentRows = function (invocations, limit) {
+  const rows = (invocations || []).slice(-(limit || 12)).reverse();
+  return rows.map(function (r) {
+    return {
+      function: r.function,
+      total: r.total_ms,
+      queued: r.queued_ms,
+      exec: r.exec_ms,
+      cold: r.cold,
+      status: r.status,
+      ok: r.status >= 200 && r.status < 300,
+    };
+  });
+};
+
+/** Log-spaced histogram: the two populations are three orders apart. */
+N.histogram = function (invocations, bins) {
+  const rows = (invocations || []).filter(function (r) { return r.total_ms > 0; });
+  if (!rows.length) return { bins: [], max: 0, cold: 0, warm: 0 };
+  const n = bins || 24;
+  const values = rows.map(function (r) { return r.total_ms; });
+  const lo = Math.log10(Math.max(Math.min.apply(null, values), 0.5));
+  const hi = Math.log10(Math.max.apply(null, values) * 1.05);
+  const span = Math.max(hi - lo, 0.2);
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    out.push({
+      lo: Math.pow(10, lo + (span * i) / n),
+      hi: Math.pow(10, lo + (span * (i + 1)) / n),
+      cold: 0,
+      warm: 0,
+    });
+  }
+  rows.forEach(function (r) {
+    let idx = Math.floor(((Math.log10(r.total_ms) - lo) / span) * n);
+    idx = Math.max(0, Math.min(n - 1, idx));
+    if (r.cold) out[idx].cold += 1; else out[idx].warm += 1;
+  });
+  const max = out.reduce(function (m, b) { return Math.max(m, b.cold + b.warm); }, 0);
+  return {
+    bins: out,
+    max: max,
+    cold: rows.filter(function (r) { return r.cold; }).length,
+    warm: rows.filter(function (r) { return !r.cold; }).length,
+  };
+};
+
+N.histNote = function (summary) {
+  if (!summary || !summary.invocations) {
+    return "No invocations yet.";
+  }
+  const warm = summary.warm_ms || {};
+  const cold = summary.cold_ms || {};
+  if (!cold.n) {
+    return summary.invocations + " invocations, none cold. Warm p50 " +
+      N.fmtMs(warm.p50) + ", p95 " + N.fmtMs(warm.p95) + ".";
+  }
+  if (!warm.n) {
+    return summary.invocations + " invocations, all cold at p50 " + N.fmtMs(cold.p50) +
+      ". Every request started a container.";
+  }
+  const ratio = cold.p50 / warm.p50;
+  return "Warm p50 " + N.fmtMs(warm.p50) + " against cold p50 " + N.fmtMs(cold.p50) +
+    " -- a factor of " + Math.round(ratio) + ". They are two populations, which is " +
+    "why the mixture's own p95 (" + N.fmtMs((summary.total_ms || {}).p95) +
+    ") mostly reports the " + N.fmtPct(summary.cold_start_rate) + " cold-start rate " +
+    "rather than anything about latency.";
+};
+
+N.policyRows = function (report) {
+  if (!report || !report.sweep) return [];
+  const recommended = (report.recommended || {}).idle_timeout_s;
+  return report.sweep.map(function (row) {
+    return {
+      timeout: row.idle_timeout_s,
+      coldRate: row.cold_start_rate,
+      gbSeconds: row.gb_seconds,
+      penalty: row.mean_latency_penalty_ms,
+      recommended: row.idle_timeout_s === recommended,
+    };
+  });
+};
+
+N.policyNote = function (report) {
+  if (!report) return "";
+  const observed = report.observed || {};
+  return (report.explanation || "") +
+    " Measured from " + observed.requests + " invocations of this function, with " +
+    "its own cold start of " + N.fmtMs((observed.measured_cold_start_s || 0) * 1000) +
+    ". It is currently set to " + observed.current_idle_timeout_s + "s.";
+};
+
+if (typeof module !== "undefined" && module.exports) module.exports = N;
+if (typeof window !== "undefined") window.NANOFAAS = N;
+
+/* ------------------------------------------------------------------ *
+ * DOM wiring.
+ * ------------------------------------------------------------------ */
+
+if (typeof document !== "undefined" && document.getElementById) {
+  const $ = function (id) { return document.getElementById(id); };
+  const esc = function (s) {
+    return String(s).replace(/[&<>"]/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c];
+    });
+  };
+
+  let functions = [];
+  let examples = [];
+  let selected = null;
+  let polling = null;
+
+  const api = async function (path, options) {
+    const response = await fetch(path, options);
+    const text = await response.text();
+    let body = null;
+    try { body = text ? JSON.parse(text) : null; } catch (e) { body = { detail: text }; }
+    if (!response.ok) {
+      const detail = body && body.detail ? body.detail : response.status + " " + response.statusText;
+      throw new Error(typeof detail === "string" ? detail : JSON.stringify(detail));
+    }
+    return body;
+  };
+
+  const show = function (id, content, isError) {
+    const node = $(id);
+    node.hidden = false;
+    node.innerHTML = isError ? '<span class="err">' + esc(content) + "</span>" : esc(content);
+  };
+
+  const renderPlatform = function (health) {
+    $("platform").innerHTML = N.platformTiles(health).map(function (t) {
+      return '<div class="stat"><b>' + esc(t.value) + "</b><span>" + esc(t.label) + "</span></div>";
+    }).join("");
+    $("platformnote").textContent = N.platformNote(health);
+  };
+
+  const renderFunctions = function () {
+    const rows = N.functionRows(functions);
+    $("functions").innerHTML =
+      "<thead><tr><th>function</th><th class='num'>live</th><th class='num'>calls</th>" +
+      "<th class='num'>cold</th><th class='num'>warm p50</th></tr></thead><tbody>" +
+      (rows.length ? rows.map(function (r) {
+        return "<tr class='" + (r.name === selected ? "selected" : "") + "' data-fn='" + esc(r.name) + "'>" +
+          "<td class='name'>" + esc(r.name) + "</td>" +
+          "<td class='num'>" + r.instances + "/" + r.max_instances + "</td>" +
+          "<td class='num'>" + r.invocations + "</td>" +
+          "<td class='num'>" + (r.coldRate === null ? "--" : N.fmtPct(r.coldRate, 0)) + "</td>" +
+          "<td class='num'>" + N.fmtMs(r.warmP50) + "</td></tr>";
+      }).join("") : "<tr><td class='name'>nothing deployed yet</td></tr>") + "</tbody>";
+    Array.prototype.forEach.call($("functions").querySelectorAll("tr[data-fn]"), function (tr) {
+      tr.style.cursor = "pointer";
+      tr.addEventListener("click", function () {
+        selected = tr.getAttribute("data-fn");
+        $("target").value = selected;
+        renderFunctions();
+      });
+    });
+  };
+
+  const renderInstances = function (instances) {
+    const rows = N.instanceRows(instances);
+    $("instances").innerHTML =
+      "<thead><tr><th>container</th><th>fn</th><th class='num'>age</th>" +
+      "<th class='num'>idle</th><th class='num'>calls</th></tr></thead><tbody>" +
+      (rows.length ? rows.map(function (r) {
+        return "<tr><td>" + esc(r.name) + "</td><td class='name'>" + esc(r.function) + "</td>" +
+          "<td class='num'>" + N.fmtAge(r.age) + "</td><td class='num'>" + N.fmtAge(r.idle) +
+          "</td><td class='num'>" + r.invocations + "</td></tr>";
+      }).join("") : "<tr><td class='name'>none running</td></tr>") + "</tbody>";
+    $("instancenote").textContent = N.instanceNote(instances, functions);
+  };
+
+  const renderRecent = function (invocations) {
+    const rows = N.recentRows(invocations, 12);
+    $("recent").innerHTML =
+      "<thead><tr><th>fn</th><th></th><th class='num'>total</th>" +
+      "<th class='num'>queued</th><th class='num'>exec</th></tr></thead><tbody>" +
+      (rows.length ? rows.map(function (r) {
+        const pill = !r.ok ? "bad" : r.cold ? "cold" : "warm";
+        const label = !r.ok ? String(r.status) : r.cold ? "cold" : "warm";
+        return "<tr><td class='name'>" + esc(r.function) + "</td>" +
+          "<td><span class='pill " + pill + "'>" + label + "</span></td>" +
+          "<td class='num'>" + N.fmtMs(r.total) + "</td>" +
+          "<td class='num'>" + N.fmtMs(r.queued) + "</td>" +
+          "<td class='num'>" + N.fmtMs(r.exec) + "</td></tr>";
+      }).join("") : "<tr><td class='name'>no invocations yet</td></tr>") + "</tbody>";
+  };
+
+  const renderHistogram = function (invocations, summary) {
+    const hist = N.histogram(invocations, 22);
+    const width = 520, height = 180, pad = { l: 34, r: 8, t: 8, b: 26 };
+    let svg = '<svg viewBox="0 0 ' + width + " " + height + '" role="img" aria-label="latency histogram">';
+    if (!hist.bins.length) {
+      svg += '<text class="axlabel" x="' + width / 2 + '" y="' + height / 2 + '" text-anchor="middle">no invocations yet</text>';
+    } else {
+      const bw = (width - pad.l - pad.r) / hist.bins.length;
+      hist.bins.forEach(function (bin, i) {
+        const total = bin.cold + bin.warm;
+        if (!total) return;
+        const h = ((height - pad.t - pad.b) * total) / hist.max;
+        const x = pad.l + i * bw;
+        const warmH = (h * bin.warm) / total;
+        const coldH = h - warmH;
+        if (warmH > 0) svg += '<rect x="' + (x + 1).toFixed(1) + '" y="' + (height - pad.b - warmH).toFixed(1) + '" width="' + (bw - 2).toFixed(1) + '" height="' + warmH.toFixed(1) + '" fill="var(--warm)"/>';
+        if (coldH > 0) svg += '<rect x="' + (x + 1).toFixed(1) + '" y="' + (height - pad.b - h).toFixed(1) + '" width="' + (bw - 2).toFixed(1) + '" height="' + coldH.toFixed(1) + '" fill="var(--cold)"/>';
+      });
+      [0, Math.floor(hist.bins.length / 2), hist.bins.length - 1].forEach(function (i) {
+        const bin = hist.bins[i];
+        svg += '<text class="axlabel" text-anchor="middle" x="' + (pad.l + i * ((width - pad.l - pad.r) / hist.bins.length) + 10).toFixed(1) +
+          '" y="' + (height - 9) + '">' + N.fmtMs(bin.lo) + "</text>";
+      });
+      svg += '<text class="axlabel" x="4" y="' + (pad.t + 9) + '">' + hist.max + "</text>";
+    }
+    svg += "</svg>";
+    $("hist").innerHTML = svg;
+    $("histnote").textContent = N.histNote(summary);
+  };
+
+  const renderPolicy = function (report) {
+    const rows = N.policyRows(report);
+    if (!rows.length) return;
+    $("policy").innerHTML =
+      "<thead><tr><th class='num'>idle timeout</th><th class='num'>cold rate</th>" +
+      "<th class='num'>GB-seconds</th><th class='num'>mean penalty</th></tr></thead><tbody>" +
+      rows.map(function (r) {
+        return "<tr class='" + (r.recommended ? "selected" : "") + "'>" +
+          "<td class='num'>" + r.timeout + "s</td>" +
+          "<td class='num'>" + N.fmtPct(r.coldRate, 1) + "</td>" +
+          "<td class='num'>" + r.gbSeconds.toFixed(1) + "</td>" +
+          "<td class='num'>" + N.fmtMs(r.penalty) + "</td></tr>";
+      }).join("") + "</tbody>";
+    $("policynote").textContent = N.policyNote(report);
+  };
+
+  const refresh = async function () {
+    try {
+      const health = await api("/api/health");
+      renderPlatform(health);
+      functions = await api("/api/functions");
+      if (!selected && functions.length) selected = functions[0].name;
+      $("target").innerHTML = functions.map(function (f) {
+        return '<option value="' + esc(f.name) + '">' + esc(f.name) + "</option>";
+      }).join("");
+      if (selected) $("target").value = selected;
+      renderFunctions();
+      renderInstances(await api("/api/instances"));
+      const invocations = await api("/api/invocations?limit=2000");
+      renderRecent(invocations);
+      const metrics = await api("/api/metrics");
+      renderHistogram(invocations, metrics.overall);
+    } catch (err) {
+      $("platformnote").innerHTML = '<span class="err">' + esc(err.message) + "</span>";
+    }
+  };
+
+  const deploy = async function () {
+    const button = $("deploy");
+    button.disabled = true;
+    try {
+      const body = {
+        name: $("name").value.trim(),
+        source: $("source").value,
+        memory_mb: Number($("memory_mb").value),
+        cpus: Number($("cpus").value),
+        concurrency: Number($("concurrency").value),
+        max_instances: Number($("max_instances").value),
+        idle_timeout_s: Number($("idle_timeout_s").value),
+      };
+      const result = await api("/api/functions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      selected = result.function.name;
+      show("deployout",
+        "deployed " + result.function.name + " -- image " +
+        (result.image.cached ? "reused" : "built in " + N.fmtMs(result.image.build_ms)) +
+        ", " + result.image.size_mb + " MB");
+      await refresh();
+    } catch (err) {
+      show("deployout", err.message, true);
+    } finally {
+      button.disabled = false;
+    }
+  };
+
+  const invokeOnce = async function () {
+    const name = $("target").value;
+    let event = {};
+    try { event = JSON.parse($("event").value || "{}"); }
+    catch (e) { show("invokeout", "the event is not valid JSON: " + e.message, true); return null; }
+    return api("/api/functions/" + encodeURIComponent(name) + "/invoke", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(event),
+    });
+  };
+
+  const invoke = async function () {
+    const button = $("invoke");
+    button.disabled = true;
+    try {
+      const r = await invokeOnce();
+      if (r) {
+        show("invokeout",
+          (r.cold ? "COLD " : "warm ") + N.fmtMs(r.total_ms) +
+          "  (cold start " + N.fmtMs(r.cold_start_ms) + ", queued " + N.fmtMs(r.queued_ms) +
+          ", exec " + N.fmtMs(r.exec_ms) + ")\n" +
+          JSON.stringify(r.body, null, 2));
+      }
+      await refresh();
+    } catch (err) {
+      show("invokeout", err.message, true);
+    } finally {
+      button.disabled = false;
+    }
+  };
+
+  const burst = async function () {
+    const button = $("burst");
+    button.disabled = true;
+    try {
+      const results = await Promise.allSettled(
+        Array.from({ length: 10 }, function () { return invokeOnce(); })
+      );
+      const ok = results.filter(function (r) { return r.status === "fulfilled" && r.value; });
+      const cold = ok.filter(function (r) { return r.value.cold; }).length;
+      const times = ok.map(function (r) { return r.value.total_ms; }).sort(function (a, b) { return a - b; });
+      show("invokeout",
+        "10 concurrent invocations: " + ok.length + " ok, " + cold + " cold starts\n" +
+        "p50 " + N.fmtMs(times[Math.floor(times.length / 2)]) +
+        "  p95 " + N.fmtMs(times[Math.floor(times.length * 0.95)]) +
+        "  max " + N.fmtMs(times[times.length - 1]));
+      await refresh();
+    } catch (err) {
+      show("invokeout", err.message, true);
+    } finally {
+      button.disabled = false;
+    }
+  };
+
+  const scaleToZero = async function () {
+    try {
+      const r = await api("/api/functions/" + encodeURIComponent($("target").value) + "/scale-to-zero", { method: "POST" });
+      show("invokeout", "stopped " + r.stopped + " container(s); the next request pays a cold start");
+      await refresh();
+    } catch (err) {
+      show("invokeout", err.message, true);
+    }
+  };
+
+  const advise = async function () {
+    try {
+      const rate = Number($("targetrate").value) / 100;
+      const report = await api("/api/policy/" + encodeURIComponent($("target").value) + "?target_cold_rate=" + rate);
+      renderPolicy(report);
+    } catch (err) {
+      $("policynote").innerHTML = '<span class="err">' + esc(err.message) + "</span>";
+    }
+  };
+
+  window.addEventListener("DOMContentLoaded", async function () {
+    try {
+      examples = await api("/api/examples");
+      $("example").innerHTML = examples.map(function (e) {
+        return '<option value="' + esc(e.name) + '">' + esc(e.name) + "</option>";
+      }).join("");
+      $("source").value = examples[0].source;
+      $("name").value = examples[0].name;
+      $("example").addEventListener("change", function () {
+        const chosen = examples.find(function (e) { return e.name === $("example").value; });
+        if (chosen) { $("source").value = chosen.source; $("name").value = chosen.name; }
+      });
+    } catch (e) { /* the console still works without the examples */ }
+
+    $("deploy").addEventListener("click", deploy);
+    $("invoke").addEventListener("click", invoke);
+    $("burst").addEventListener("click", burst);
+    $("zero").addEventListener("click", scaleToZero);
+    $("advise").addEventListener("click", advise);
+    await refresh();
+    // Containers disappear on their own, so the page has to keep looking or
+    // it shows a platform that stopped existing ten seconds ago.
+    polling = setInterval(refresh, 2000);
+  });
+}
+</script>
+</body>
+</html>
