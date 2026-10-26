@@ -220,8 +220,12 @@ def study_policy(rate_per_minute: float, requests: int) -> dict:
     print(f"\n  recommendation: {why}")
     print(f"  closed form for the same target: {closed:.1f}s")
     if abs(best.idle_timeout_s - closed) > 1.0:
-        at_closed = [r for r in rows if abs(r.idle_timeout_s - closed) < 1e-9]
-        realised = at_closed[0].cold_start_rate if at_closed else float("nan")
+        # The nearest rung, not an exact match: the closed form here is
+        # 29.96s and the sweep's rung is 30s, so an equality test finds
+        # nothing and prints nan.
+        nearest = min(rows, key=lambda r: abs(r.idle_timeout_s - closed))
+        realised = nearest.cold_start_rate
+        closed_rung = nearest.idle_timeout_s
         print(
             f"\n  These disagree, and the disagreement is the point rather than a\n"
             f"  defect. The closed form gives the timeout at which the *expected*\n"
