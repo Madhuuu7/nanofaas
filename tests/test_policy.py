@@ -162,9 +162,25 @@ def test_sparse_traffic_is_told_so_rather_than_given_a_bad_answer():
     if it were a recommendation."""
     gaps = [1800.0] * 50  # one request every half hour
     best, why = recommend(gaps, target_cold_rate=0.05)
-    assert "too sparse" in why
+    assert "gaps between requests are long enough" in why
     assert "stop calling it scale-to-zero" in why
     assert best.cold_start_rate > 0.05
+
+
+def test_a_short_trace_is_told_about_its_floor_not_blamed_for_sparsity():
+    """The console found this one. Fourteen requests fired in a burst cannot
+    beat a 7.1% cold-start rate, because the first request is always cold --
+    nothing is warm at t=0. That is a floor of 1/requests and has nothing to
+    do with the gaps, so blaming sparse traffic sends someone to tune a
+    timeout that is already doing everything it can.
+    """
+    gaps = [0.01] * 13  # a dense burst of 14 requests
+    best, why = recommend(gaps, target_cold_rate=0.05)
+    assert best.cold_starts == 1
+    assert "first request is always cold" in why
+    assert "floor is 7.1%" in why
+    assert "sparse" not in why
+    assert "Collect more traffic" in why
 
 
 def test_a_tighter_target_never_recommends_a_shorter_timeout():

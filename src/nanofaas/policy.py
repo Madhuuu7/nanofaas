@@ -164,12 +164,28 @@ def recommend(
     feasible = [r for r in results if r.cold_start_rate <= target_cold_rate]
     if not feasible:
         best = min(results, key=lambda r: r.cold_start_rate)
+        # Two different reasons the target can be unreachable, and blaming the
+        # wrong one sends someone to tune the wrong thing. The first request
+        # is always cold -- nothing is warm at t=0 -- so on a short trace the
+        # floor is 1/requests regardless of the timeout. A burst of 14
+        # requests cannot beat 7.1% even if every gap is a millisecond, and
+        # calling that "sparse traffic" is simply false.
+        if best.cold_starts <= 1:
+            return best, (
+                f"no timeout reaches a {target_cold_rate:.0%} cold-start rate, but "
+                f"not because of the timeout: the first request is always cold, so "
+                f"with only {best.requests} requests the floor is "
+                f"{1 / best.requests:.1%} whatever you choose. Every longer timeout "
+                f"here is already doing all it can. Collect more traffic before "
+                f"reading anything into this."
+            )
         return best, (
             f"no timeout in the sweep reaches a {target_cold_rate:.0%} cold-start "
-            f"rate: this traffic is too sparse for scale-to-zero to be cheap, and "
-            f"the best on offer is {best.cold_start_rate:.1%} at "
-            f"{best.idle_timeout_s:g}s. Either accept the cold starts or keep one "
-            f"instance warm and stop calling it scale-to-zero."
+            f"rate: the gaps between requests are long enough that containers "
+            f"expire between them whatever the timeout, and the best on offer is "
+            f"{best.cold_start_rate:.1%} at {best.idle_timeout_s:g}s. Either accept "
+            f"the cold starts or keep one instance warm and stop calling it "
+            f"scale-to-zero."
         )
     best = min(feasible, key=lambda r: r.gb_seconds)
     cheapest = min(results, key=lambda r: r.gb_seconds)
