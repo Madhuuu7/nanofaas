@@ -83,10 +83,21 @@ def test_a_container_starts_serves_and_reports_its_cold_start(runtime, built, in
     assert breakdown["create_ms"] > 0
     assert breakdown["start_ms"] > 0
     assert breakdown["ready_ms"] > 0
+
+    # Against the raw values, not the dict: to_dict rounds every phase and
+    # the total independently for display, so the rounded parts can miss the
+    # rounded total by up to 0.02ms. Asserting on the dict passes or fails by
+    # luck depending on where the decimals land.
+    phases = instance.cold_start
+    assert phases.total_ms == pytest.approx(
+        phases.create_ms + phases.start_ms + phases.port_ms + phases.ready_ms,
+        rel=1e-12,
+    )
+    # And the displayed total is still the displayed phases, to a cent.
     assert breakdown["total_ms"] == pytest.approx(
         breakdown["create_ms"] + breakdown["start_ms"]
         + breakdown["port_ms"] + breakdown["ready_ms"],
-        rel=1e-6,
+        abs=0.05,
     )
 
     status, body = runtime.invoke(instance, {"name": "docker"}, 10.0)
