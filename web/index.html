@@ -433,16 +433,40 @@ N.functionRows = function (functions) {
       max_instances: f.max_instances,
       invocations: m.invocations || 0,
       coldRate: m.cold_start_rate === undefined ? null : m.cold_start_rate,
-      warmP50: (m.warm_ms && m.warm_ms.p50) || null,
+      // Service time, like the note under the histogram: a warm request
+      // that waited for a busy container paid for capacity, and a column
+      // that charged it to the warm path would contradict the sentence
+      // sitting directly above this table.
+      warmP50: (m.warm_service_ms && m.warm_service_ms.p50) ||
+        (m.warm_ms && m.warm_ms.p50) || null,
       coldP50: (m.cold_ms && m.cold_ms.p50) || null,
     };
   });
 };
 
+/**
+ * The readable half of a container's name.
+ *
+ * They are named `nanofaas-{function}-{counter}-{clock}`, where the clock
+ * suffix exists only to keep two containers of the same function apart and
+ * says nothing to anyone reading a chart. Keeping the last two segments --
+ * which is what this did -- threw away the function name and kept the
+ * meaningless one, so every lane was labelled something like `1-24592`.
+ */
+N.shortName = function (name, fn) {
+  const text = String(name || "");
+  if (fn) {
+    const at = text.indexOf("-" + fn + "-");
+    if (at >= 0) return fn + "-" + text.slice(at + fn.length + 2).split("-")[0];
+    if (text.indexOf(fn + "-") === 0) return text.split("-").slice(0, 2).join("-");
+  }
+  return text.split("-").slice(-2).join("-");
+};
+
 N.instanceRows = function (instances) {
   return (instances || []).map(function (i) {
     return {
-      name: i.name.split("-").slice(-2).join("-"),
+      name: N.shortName(i.name, i.function),
       function: i.function,
       age: i.age_s,
       idle: i.idle_s,
@@ -1210,7 +1234,7 @@ if (typeof document !== "undefined" && document.getElementById) {
         const left = x(row.born);
         const headEnd = x(row.ready);
         svg += '<text class="lane" x="' + (pad.l - 8) + '" y="' + (mid + 3.5) +
-          '" text-anchor="end">' + esc(row.name.split("-").slice(-2).join("-")) + "</text>";
+          '" text-anchor="end">' + esc(N.shortName(row.name, row.function)) + "</text>";
         // Alive: a hairline, because keeping a container is nearly free.
         svg += '<rect x="' + headEnd.toFixed(1) + '" y="' + (mid - 1.5).toFixed(1) +
           '" width="' + Math.max(x(stop) - headEnd, 1).toFixed(1) +

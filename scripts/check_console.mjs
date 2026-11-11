@@ -386,6 +386,35 @@ const lifetimeState = (overrides) => Object.assign({
   },
 }, overrides || {});
 
+check("a container is labelled by what it runs, not by its uniqueness suffix", () => {
+  // Real names: nanofaas-{function}-{counter}-{clock}. Keeping the last two
+  // segments put "1-24592" on every lane of the published chart.
+  assertEqual(N.shortName("nanofaas-hello-1-24592", "hello"), "hello-1");
+  assertEqual(N.shortName("nanofaas-fib-6-42759", "fib"), "fib-6");
+  assertEqual(N.shortName("fake-hello-3", "hello"), "hello-3");
+  // A function whose name contains a dash still resolves.
+  assertEqual(N.shortName("nanofaas-my-fn-2-9", "my-fn"), "my-fn-2");
+  // And with no function to go on it falls back rather than throwing.
+  assertEqual(N.shortName("nanofaas-hello-1-24592"), "1-24592");
+  assertEqual(N.shortName("", "hello"), "");
+});
+
+check("the functions table and the note under the histogram agree", () => {
+  // Both describe the warm path, and before this they disagreed by three
+  // orders of magnitude after a burst: the table charged the queue wait to
+  // the warm population and the note did not.
+  const rows = N.functionRows([{
+    name: "hello", memory_mb: 128, idle_timeout_s: 30, max_instances: 4,
+    live: { instances: 1 },
+    metrics: {
+      invocations: 12, cold_start_rate: 0.33,
+      warm_ms: { n: 8, p50: 867 }, warm_service_ms: { n: 8, p50: 1.6 },
+      warm_queued: 7, cold_ms: { n: 4, p50: 865 },
+    },
+  }]);
+  assertEqual(rows[0].warmP50, 1.6);
+});
+
 check("a lifetime is built from the events, the requests and what is running", () => {
   const model = N.lifetimes(lifetimeState());
   assertEqual(model.total, 2);
