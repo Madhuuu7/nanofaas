@@ -384,12 +384,24 @@ N.histNote = function (summary) {
     return summary.invocations + " invocations, all cold at p50 " + N.fmtMs(cold.p50) +
       ". Every request started a container.";
   }
-  const ratio = cold.p50 / warm.p50;
-  return "Warm p50 " + N.fmtMs(warm.p50) + " against cold p50 " + N.fmtMs(cold.p50) +
+  // The warm number has to be service time, not total. A warm request that
+  // waited for a busy container paid for capacity, and charging that wait to
+  // the warm population makes a burst read as "warm invocation is as slow as
+  // a cold start" -- which is the opposite of what happened.
+  const service = summary.warm_service_ms || warm;
+  const ratio = cold.p50 / service.p50;
+  let note = "Warm p50 " + N.fmtMs(service.p50) + " against cold p50 " + N.fmtMs(cold.p50) +
     " -- a factor of " + Math.round(ratio) + ". They are two populations, which is " +
     "why the mixture's own p95 (" + N.fmtMs((summary.total_ms || {}).p95) +
     ") mostly reports the " + N.fmtPct(summary.cold_start_rate) + " cold-start rate " +
     "rather than anything about latency.";
+  if (summary.warm_queued) {
+    note += " " + summary.warm_queued + " warm request" +
+      (summary.warm_queued === 1 ? "" : "s") + " also waited for a busy " +
+      "container, which puts the warm total at " + N.fmtMs(warm.p50) +
+      " -- that one is a statement about capacity, not about cold starts.";
+  }
+  return note;
 };
 
 N.policyRows = function (report) {

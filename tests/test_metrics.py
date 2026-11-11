@@ -87,6 +87,39 @@ def test_cold_and_warm_are_summarised_separately():
     assert summary["cold_ms"]["p50"] == 3200.0
 
 
+def test_a_warm_call_that_queued_is_not_charged_to_the_warm_population():
+    """Found on the published console, which said a warm call was as slow as
+    a cold start.
+
+    A burst of ten at a function scaled to zero starts a few containers and
+    makes the rest wait for one. Those waiters never paid for a start, so
+    they are warm -- but their total is almost all queueing, and summarising
+    it as the cost of a warm invocation inverts what happened: the warm path
+    was fast and there were not enough containers to run on. Queueing is a
+    capacity number and belongs apart from both populations.
+    """
+    metrics = Metrics()
+    for _ in range(3):
+        metrics.record(inv(880.0, cold=True))
+    for _ in range(7):
+        metrics.record(inv(860.0, queued_ms=859.0))
+
+    summary = metrics.summary()
+    assert summary["warm_ms"]["p50"] == 860.0, "the total is still reported"
+    assert summary["warm_service_ms"]["p50"] == 1.0, "and what it cost to serve"
+    assert summary["warm_queued"] == 7
+    assert summary["cold_ms"]["p50"] == 880.0
+
+
+def test_warm_service_time_equals_the_total_when_nothing_waits():
+    metrics = Metrics()
+    for _ in range(10):
+        metrics.record(inv(4.0))
+    summary = metrics.summary()
+    assert summary["warm_service_ms"]["p50"] == summary["warm_ms"]["p50"] == 4.0
+    assert summary["warm_queued"] == 0
+
+
 def test_the_mixture_percentile_mostly_reports_the_cold_start_rate():
     """The point the console makes in prose, asserted here: at a 1% cold rate
     the p99 of the mixture is a cold start, so it is a statement about how

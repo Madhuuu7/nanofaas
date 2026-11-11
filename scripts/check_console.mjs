@@ -282,6 +282,36 @@ check("the latency note states the ratio and what the mixture p95 means", () => 
   assert(/factor of \d+/.test(note), "the note should quantify the gap");
 });
 
+check("a warm call that queued is not charged to the warm population", () => {
+  // The case that produced a false sentence on the published page: ten
+  // concurrent requests at a function scaled to zero, three containers
+  // started, seven warm requests waiting ~860ms for one of them. Charging
+  // the wait to the warm population read as "warm is as slow as cold".
+  const note = N.histNote({
+    invocations: 15, cold_start_rate: 0.33,
+    warm_ms: { n: 10, p50: 854 },
+    warm_service_ms: { n: 10, p50: 0.7 },
+    warm_queued: 7,
+    cold_ms: { n: 5, p50: 876 },
+    total_ms: { p95: 1650 },
+  });
+  assertIncludes(note, "Warm p50 0.7ms");
+  assert(/factor of 125\d/.test(note), `the ratio is against service time: ${note}`);
+  assertIncludes(note, "7 warm requests also waited");
+  assertIncludes(note, "854ms");
+  assertIncludes(note, "about capacity");
+});
+
+check("the note falls back to the warm total when nothing queued", () => {
+  const note = N.histNote({
+    invocations: 12, cold_start_rate: 0.08,
+    warm_ms: { n: 11, p50: 4.0 }, warm_service_ms: { n: 11, p50: 3.9 },
+    warm_queued: 0, cold_ms: { n: 1, p50: 900 }, total_ms: { p95: 900 },
+  });
+  assert(!note.includes("waited"), "nothing queued, so say nothing about queueing");
+  assertIncludes(note, "Warm p50 3.9ms");
+});
+
 check("the latency note is honest when there are no cold starts yet", () => {
   const note = N.histNote({
     invocations: 10, cold_start_rate: 0,

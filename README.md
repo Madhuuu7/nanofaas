@@ -169,7 +169,7 @@ at login by default.
 python -m venv .venv && .venv/Scripts/activate   # or source .venv/bin/activate
 pip install -e ".[dev]"
 
-pytest                            # 156 tests, ~15s (20 need Docker, skipped without it)
+pytest                            # 158 tests, ~15s (20 need Docker, skipped without it)
 pytest -m "not docker"            # skips the 12 slowest container tests
 python scripts/bench.py --quick   # the study above, ~30s
 node scripts/check_console.mjs    # the console, headless
@@ -308,7 +308,7 @@ because its data plane is down is one you cannot use to find out why.
 
 ## Testing
 
-156 tests, 136 of which need no Docker.
+158 tests, 138 of which need no Docker.
 
 The pool is where this platform is won or lost, and every interesting case is
 a race — two threads deciding simultaneously whether to start a container, a

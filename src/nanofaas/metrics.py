@@ -140,6 +140,17 @@ class Metrics:
             # populations, and the headline percentile of the mixture is
             # mostly a statement about the cold-start rate.
             "warm_ms": summarise([row.total_ms for row in warm]),
+            # And the split inside the warm population, which a burst makes
+            # the difference between a true sentence and a false one. A warm
+            # request that waited for a busy container paid for capacity, not
+            # for a container start; counting that wait as the cost of a warm
+            # invocation makes a burst look like warm calls are slow, when
+            # what happened is that they were fast and there were not enough
+            # containers to run them on.
+            "warm_service_ms": summarise(
+                [max(row.total_ms - row.queued_ms, 0.0) for row in warm]
+            ),
+            "warm_queued": sum(1 for row in warm if row.queued_ms >= 1.0),
             "cold_ms": summarise([row.total_ms for row in cold]),
             "queued_ms": summarise([row.queued_ms for row in rows]),
             "exec_ms": summarise([row.exec_ms for row in rows if row.exec_ms > 0]),
