@@ -275,6 +275,7 @@ def create_app(data_dir: Path | str = "data") -> FastAPI:
                     "reason": e.reason,
                     "cold_start_ms": round(e.cold_start_ms, 1),
                     "lifetime_s": e.lifetime_s,
+                    "phases": e.phases,
                 }
                 for e in platform.metrics.events(limit=120)
             ],

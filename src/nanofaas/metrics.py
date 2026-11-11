@@ -91,6 +91,11 @@ class ContainerEvent:
     reason: str = ""
     cold_start_ms: float = 0.0
     lifetime_s: float = 0.0
+    #: The phase breakdown of the start this container paid for, kept on the
+    #: event rather than only on the live container. A platform at zero has
+    #: no containers to ask, and "where did the cold start go" is a question
+    #: about starts that have happened, not about ones still running.
+    phases: dict[str, float] | None = None
 
 
 class Metrics:

@@ -256,6 +256,7 @@ class Pool:
                 kind="start",
                 at=time.time(),
                 cold_start_ms=instance.cold_start.total_ms,
+                phases=instance.cold_start.to_dict(),
             )
         )
         queued_ms = (

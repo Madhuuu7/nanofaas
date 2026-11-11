@@ -460,6 +460,48 @@ def test_metrics_are_recorded_for_every_invocation():
     pool.shutdown()
 
 
+def test_the_start_event_carries_where_the_cold_start_went():
+    """So a platform at zero can still answer the question.
+
+    The phase breakdown lives on the running container, which is exactly
+    what a scale-to-zero platform does not have when it is doing its job.
+    Keeping it on the event means the console can take a cold start apart
+    after the container that paid for it has been reaped.
+    """
+    metrics = Metrics()
+    pool = Pool(FakeRuntime(start_delay_s=0.05), metrics)
+    spec = make_spec(idle_timeout_s=60)
+    pool.invoke(spec, {})
+    pool.scale_to_zero(spec.name)
+
+    assert pool.instances(spec.name) == [], "nothing is running to ask"
+    started = [e for e in metrics.events() if e.kind == "start"]
+    assert len(started) == 1
+    phases = started[0].phases
+    assert phases is not None, "the start event forgot what the start cost"
+    assert set(phases) >= {"create_ms", "start_ms", "port_ms", "ready_ms", "total_ms"}
+    assert phases["total_ms"] == pytest.approx(started[0].cold_start_ms)
+    # The phases are what the total is made of, give or take the rounding
+    # each of them carries into the dict.
+    parts = sum(phases[k] for k in ("create_ms", "start_ms", "port_ms", "ready_ms"))
+    assert parts == pytest.approx(phases["total_ms"], abs=0.05)
+    pool.shutdown()
+
+
+def test_a_stop_event_carries_no_phases_to_confuse_them_with():
+    metrics = Metrics()
+    pool = Pool(FakeRuntime(), metrics)
+    spec = make_spec()
+    pool.invoke(spec, {})
+    pool.scale_to_zero(spec.name)
+
+    stopped = [e for e in metrics.events() if e.kind == "stop"]
+    assert len(stopped) == 1
+    assert stopped[0].phases is None
+    assert stopped[0].reason == "manual"
+    pool.shutdown()
+
+
 def test_the_reaper_thread_runs_and_stops_cleanly():
     runtime = FakeRuntime()
     pool = Pool(runtime, Metrics(), PoolConfig(reap_interval_s=0.05))
