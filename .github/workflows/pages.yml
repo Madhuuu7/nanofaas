@@ -1,0 +1,98 @@
+name: pages
+
+# The console is a client of a control plane whose data plane is the Docker
+# daemon, and Pages runs neither. What gets published is the same page plus a
+# recording of a session that really happened on a runner that did have one:
+# `scripts/record_console.py` drives it, and the page reads the recording
+# when it finds no platform to talk to.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deploy at a time, and let it finish: cancelling a half-finished publish
+# is how a site ends up serving a page from one commit and a recording from
+# another.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      # Pulled before the recording rather than during it, so the image pull
+      # does not land inside the first cold start the page publishes.
+      - name: Warm the base image
+        run: docker pull -q python:3.12-alpine
+
+      - name: Record the session
+        # The full traffic phase: about two and a half minutes of requests
+        # with exponential gaps, which is what the idle-timeout
+        # recommendation on the published page is computed from.
+        run: python scripts/record_console.py --site _site
+
+      - name: Check the bundle the way the page reads it
+        run: node scripts/check_console.mjs --recorded _site/recorded
+
+      - name: The recording is of a real daemon
+        # The recorder refuses to run without one, and the tests drive the
+        # same script against a fake runtime. This is the line between the
+        # two: nothing made by the fake is allowed near the published site.
+        run: |
+          python - <<'EOF'
+          import json, pathlib, re, sys
+
+          session = json.loads(pathlib.Path("_site/recorded/session.json").read_text())
+          host = session["host"]
+          if not re.match(r"^\d+\.\d+", str(host.get("docker") or "")):
+              sys.exit(f"this recording was not made against a Docker daemon: {host}")
+          steps = len(session["steps"])
+          print(f"{steps} steps, recorded on Docker {host['docker']} ({host['os']})")
+          EOF
+
+      - name: Nothing in the site is fetched from elsewhere
+        # The page is demoed offline and must not depend on a CDN. Checked
+        # again here because this is the artefact that actually ships.
+        run: |
+          if grep -Eo '(src|href)="(https?:)?//[^"]*"' _site/index.html; then
+            echo "the published page loads something over the network"
+            exit 1
+          fi
+          echo "no external resources"
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

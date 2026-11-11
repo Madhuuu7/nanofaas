@@ -5,3 +5,10 @@ __pycache__/
 *.egg-info/
 data/
 reports/
+
+# Built, not committed: the recording is made against a real daemon by
+# scripts/record_console.py, and the site is assembled from it.
+web/recorded/
+_site/
+dist/
+.playwright-mcp/

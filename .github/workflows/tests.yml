@@ -1,0 +1,91 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      # The console harness is Node and two tests shell out to it. They skip
+      # without it, which would turn a missing runtime into a quietly smaller
+      # suite rather than a failure.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      # The runner has a daemon, so the tests marked `docker` -- the ones
+      # that build a real image and time a real cold start -- actually run
+      # here. On a laptop without Docker Desktop they skip, and this is the
+      # job that stops that from being how the suite is usually run.
+      - name: Docker is here, so the container tests are not skipped
+        run: |
+          docker version --format 'server {{.Server.Version}}'
+          docker pull -q python:3.12-alpine
+
+      - name: Tests
+        run: pytest -q
+
+      - name: The console, headless
+        run: node scripts/check_console.mjs
+
+  recording:
+    # The published console is this page with a recording where the platform
+    # would be. This job builds what Pages would deploy and checks it, so a
+    # broken deploy fails on a pull request rather than on the live site.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Record a session against real containers
+        # --quick: a shorter traffic phase, which is still long enough for the
+        # recommendation to be drawn from more requests than the audit accepts.
+        # The full-length one is for the deploy.
+        run: python scripts/record_console.py --site dist --quick
+
+      - name: Check the bundle the way the page reads it
+        run: node scripts/check_console.mjs --recorded dist/recorded
+
+      - name: The recording is of a real daemon
+        run: |
+          python - <<'EOF'
+          import json, pathlib, re, sys
+
+          host = json.loads(pathlib.Path("dist/recorded/session.json").read_text())["host"]
+          if not re.match(r"^\d+\.\d+", str(host.get("docker") or "")):
+              sys.exit(f"this recording was not made against a Docker daemon: {host}")
+          print(f"recorded on Docker {host['docker']}, {host['os']}")
+          EOF
