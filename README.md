@@ -1,5 +1,13 @@
 # nanofaas
 
+[![tests](https://github.com/Madhuuu7/nanofaas/actions/workflows/tests.yml/badge.svg)](https://github.com/Madhuuu7/nanofaas/actions/workflows/tests.yml)
+[![pages](https://github.com/Madhuuu7/nanofaas/actions/workflows/pages.yml/badge.svg)](https://github.com/Madhuuu7/nanofaas/actions/workflows/pages.yml)
+
+**Console: [madhuuu7.github.io/nanofaas](https://madhuuu7.github.io/nanofaas/)** --
+a replay of a real session, recorded against real containers in CI. There is
+no platform behind that page and it says so; [what the recording
+is](#the-published-console) explains how it is made and what it cannot show.
+
 A scale-to-zero function platform, in about 2,000 lines. Deploy a handler, get
 a container with hard memory, CPU and capability limits; idle containers are
 stopped; the next request pays a cold start.
@@ -161,8 +169,8 @@ at login by default.
 python -m venv .venv && .venv/Scripts/activate   # or source .venv/bin/activate
 pip install -e ".[dev]"
 
-pytest                            # 142 tests, ~65s (12 need Docker, skipped without it)
-pytest -m "not docker"            # 130 tests, ~8s, no daemon needed
+pytest                            # 156 tests, ~15s (20 need Docker, skipped without it)
+pytest -m "not docker"            # skips the 12 slowest container tests
 python scripts/bench.py --quick   # the study above, ~30s
 node scripts/check_console.mjs    # the console, headless
 uvicorn nanofaas.api.app:app      # the console at http://127.0.0.1:8000
@@ -184,6 +192,44 @@ curl -X POST localhost:8000/api/functions -H 'Content-Type: application/json' -d
 curl -X POST localhost:8000/api/functions/hello/invoke -d '{"name":"you"}'
 curl localhost:8000/api/policy/hello          # what timeout your traffic argues for
 ```
+
+---
+
+## The published console
+
+GitHub Pages serves files. This console is a client of a FastAPI control plane
+whose data plane is the Docker daemon, so a deployed copy has two honest
+options: show nothing, or replay a session that really happened. It does the
+second.
+
+`scripts/record_console.py` starts the real server on a CI runner that has a
+daemon, drives it over HTTP exactly as the browser does — deploy, a cold
+invoke, the same call warm, ten concurrent requests at a function scaled to
+zero, scale to zero, the cold start again, a handler that raises, then two and
+a half minutes of traffic with exponential gaps — and after every step stores
+the same five GET responses the page polls. The published page detects that
+nothing answers `/api/health`, loads the recording, and serves those snapshots
+to its own rendering code. Press Invoke on it and the cursor moves to the
+moment that invocation really happened; the numbers are the ones measured
+then, on that runner, which the page names at the top.
+
+Three things keep it from being a prettier kind of lying:
+
+- **The recorder refuses to run without a daemon.** A recording assembled from
+  fixtures would be a drawing of a platform rather than one, and the deploy
+  rejects any bundle whose host is not a real Docker version.
+- **The session is audited before it is published.** It has to contain a cold
+  start clearly slower than a warm call, a burst that ran more than one
+  container, a scale-to-zero that stopped something, and a recommendation
+  drawn from enough requests to mean anything. A session that fails any of
+  those is not deployed — the build goes red instead.
+- **It cannot be reproduced byte for byte, and does not claim to be.** The
+  cold starts are real, so every recording differs. What is checked is what it
+  demonstrates, not that it matches a stored copy.
+
+What the replay cannot do is deploy your handler. Those inputs are disabled
+rather than left looking live, and the page says why. For a console that
+answers everything, run it locally — it is one `uvicorn` away.
 
 ---
 
@@ -262,7 +308,7 @@ because its data plane is down is one you cannot use to find out why.
 
 ## Testing
 
-142 tests, 130 of which need no Docker.
+156 tests, 136 of which need no Docker.
 
 The pool is where this platform is won or lost, and every interesting case is
 a race — two threads deciding simultaneously whether to start a container, a
@@ -278,7 +324,17 @@ handler that cannot import is shown to fail the deploy with its traceback.
 
 `scripts/check_console.mjs` runs the console's pure helpers in a Node vm with
 no DOM and asserts every id the script reaches for exists in the markup — a
-typo there is silent in a browser and invisible to the Python tests.
+typo there is silent in a browser and invisible to the Python tests. With
+`--recorded`, it checks the published bundle the same way the page reads it.
+
+`tests/test_recorded.py` drives the whole recording script end to end against
+a runtime that answers like the example handlers, which takes about four
+seconds and needs no daemon. It cannot make the recording that ships — that
+one is a real session or it is nothing — but it covers the parts that break
+quietly: the shape of the bundle, the page's reading of it, and the audit that
+decides whether a session is publishable at all. Two of those tests feed the
+audit a deliberately bad session (a recommendation drawn from six requests, a
+burst that never scaled out) and assert it refuses.
 
 ---
 
@@ -321,9 +377,11 @@ src/nanofaas/
   policy.py             choosing the idle timeout from a trace
   metrics.py            the bounded history, by percentile
   api/app.py            the control plane
-web/index.html          the console, self-contained
+web/index.html          the console, self-contained -- live, or replaying
 scripts/bench.py        the study behind every number above
-scripts/check_console.mjs
+scripts/record_console.py  one real session, recorded for the published page
+scripts/check_console.mjs  the console and the recording, headless
+.github/workflows/      tests on every push; the recording and the deploy
 deploy/                 compose file, and what the Docker socket costs
 ```
 
