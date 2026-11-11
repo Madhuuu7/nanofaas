@@ -169,7 +169,7 @@ at login by default.
 python -m venv .venv && .venv/Scripts/activate   # or source .venv/bin/activate
 pip install -e ".[dev]"
 
-pytest                            # 158 tests, ~15s (20 need Docker, skipped without it)
+pytest                            # 160 tests, ~15s (20 need Docker, skipped without it)
 pytest -m "not docker"            # skips the 12 slowest container tests
 python scripts/bench.py --quick   # the study above, ~30s
 node scripts/check_console.mjs    # the console, headless
@@ -177,9 +177,26 @@ uvicorn nanofaas.api.app:app      # the console at http://127.0.0.1:8000
 ```
 
 The console deploys a function, invokes it, fires a burst of ten, and shows
-containers appearing and being reaped on a 2-second poll — plus a log-spaced
-latency histogram with cold and warm stacked separately, and the idle-timeout
-recommendation for whatever traffic you have just generated.
+containers appearing and being reaped on a 2-second poll. It opens on the
+chart the rest of the project is an argument about:
+
+**Every container that has lived here** — one line per container on a shared
+time axis, drawn from the platform's own history. A block at the head of each
+line is the cold start, placed where it happened: *before* the container could
+serve anything. Ticks are the requests it served, and the line ends where the
+reaper stopped it. A burst shows as several lines being born at once and
+mostly red; a quiet period shows as long green lines with ticks scattered
+along them. Underneath, in words: what the starts cost against the total
+container time, which is the share of what you paid for that bought no work.
+
+**Where a cold start goes** — the four phases as one bar, the daemon's three
+in grey and the handler's `ready` in red, because that is the only one a
+function author can change. The breakdown is kept on the start *event* rather
+than only on the running container, so a platform sitting at zero — which is
+the platform doing its job — can still answer the question.
+
+Then the log-spaced latency histogram with cold and warm separated, and the
+idle-timeout recommendation for whatever traffic you have just generated.
 
 Deploying by API instead:
 
@@ -308,7 +325,7 @@ because its data plane is down is one you cannot use to find out why.
 
 ## Testing
 
-158 tests, 138 of which need no Docker.
+160 tests, 140 of which need no Docker.
 
 The pool is where this platform is won or lost, and every interesting case is
 a race — two threads deciding simultaneously whether to start a container, a
@@ -324,8 +341,13 @@ handler that cannot import is shown to fail the deploy with its traceback.
 
 `scripts/check_console.mjs` runs the console's pure helpers in a Node vm with
 no DOM and asserts every id the script reaches for exists in the markup — a
-typo there is silent in a browser and invisible to the Python tests. With
-`--recorded`, it checks the published bundle the same way the page reads it.
+typo there is silent in a browser and invisible to the Python tests. 41 checks
+there, most of them on the functions that turn container counts into claims:
+that a cold start is placed before the container could serve, that "now" comes
+from the recording rather than the reader's clock, that the phase shares add
+up to one. With `--recorded` it runs seven more against the published bundle,
+including that every snapshot in it renders without a note reading
+"undefined".
 
 `tests/test_recorded.py` drives the whole recording script end to end against
 a runtime that answers like the example handlers, which takes about four
@@ -378,6 +400,7 @@ src/nanofaas/
   metrics.py            the bounded history, by percentile
   api/app.py            the control plane
 web/index.html          the console, self-contained -- live, or replaying
+web/FONTS.md            the two embedded typefaces, and their licence
 scripts/bench.py        the study behind every number above
 scripts/record_console.py  one real session, recorded for the published page
 scripts/check_console.mjs  the console and the recording, headless

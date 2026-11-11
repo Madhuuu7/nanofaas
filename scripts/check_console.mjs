@@ -80,6 +80,12 @@ check("the page loads nothing from the network", () => {
   const links = [...html.matchAll(/<link\b[^>]*href="([^"]+)"/g)].map((m) => m[1]);
   const fetched = links.filter((url) => !url.startsWith("data:"));
   assertEqual(fetched.join(", "), "", "a <link> points at something off the page");
+  // The typefaces are embedded, and the way that silently stops being true
+  // is a stylesheet url() pointing back at a font host.
+  const remote = [...html.matchAll(/url\(\s*['"]?(https?:|\/\/)[^)]*\)/g)].map((m) => m[0]);
+  assertEqual(remote.join(", "), "", "a stylesheet fetches something");
+  assert(/@font-face/.test(html) && /src: url\(data:font/.test(html),
+    "the console should carry its own typefaces");
 });
 
 check("every API path the console calls is one the server serves", () => {
@@ -351,6 +357,162 @@ check("missing data degrades to empty rather than throwing", () => {
   assertEqual(N.policyNote(null), "");
 });
 
+// -- container lifetimes ---------------------------------------------------
+//
+// The chart the console is built around, and the helper most able to draw a
+// confident picture of something that did not happen.
+
+const lifetimeState = (overrides) => Object.assign({
+  instances: [
+    {
+      name: "nanofaas-hello-4", function: "hello", age_s: 12, idle_s: 1,
+      invocations: 3, in_flight: 0,
+      cold_start: { create_ms: 70, start_ms: 260, port_ms: 8, ready_ms: 900, total_ms: 1238 },
+    },
+  ],
+  invocations: [
+    { function: "hello", at: 1000, instance: "nanofaas-hello-1", total_ms: 1300, cold: true },
+    { function: "hello", at: 1002, instance: "nanofaas-hello-1", total_ms: 4, cold: false },
+    { function: "hello", at: 1040, instance: "nanofaas-hello-4", total_ms: 1240, cold: true },
+  ],
+  metrics: {
+    events: [
+      { function: "hello", instance: "nanofaas-hello-1", kind: "start", at: 1000, cold_start_ms: 1200,
+        phases: { create_ms: 60, start_ms: 240, port_ms: 6, ready_ms: 894, total_ms: 1200 } },
+      { function: "hello", instance: "nanofaas-hello-1", kind: "stop", at: 1030, reason: "idle", lifetime_s: 30 },
+      { function: "hello", instance: "nanofaas-hello-4", kind: "start", at: 1040, cold_start_ms: 1238,
+        phases: { create_ms: 70, start_ms: 260, port_ms: 8, ready_ms: 900, total_ms: 1238 } },
+    ],
+  },
+}, overrides || {});
+
+check("a lifetime is built from the events, the requests and what is running", () => {
+  const model = N.lifetimes(lifetimeState());
+  assertEqual(model.total, 2);
+  const [first, second] = model.lanes;
+  assertEqual(first.name, "nanofaas-hello-1");
+  assertEqual(first.stop, 1030);
+  assertEqual(first.reason, "idle");
+  assertEqual(first.calls.length, 2);
+  assertEqual(second.running, true);
+  assertEqual(second.stop, null, "a running container has not stopped");
+});
+
+check("the cold start is drawn before the container could serve", () => {
+  // A start event is stamped when the container became able to answer, so
+  // the 1.2 seconds it cost happened before that moment. Drawing it after
+  // would put the expensive part of a container's life after the point it
+  // was already serving requests.
+  const model = N.lifetimes(lifetimeState());
+  const first = model.lanes[0];
+  assertEqual(first.ready, 1000);
+  assertEqual(Math.round((first.ready - first.born) * 1000), 1200);
+  assert(model.t0 <= first.born, "the window has to contain the births");
+});
+
+check("now comes from the recording, never from the reader's clock", () => {
+  // A published recording is replayed hours or weeks later. Reading the
+  // local clock would draw every container as having died long ago and
+  // stretch the axis across the gap.
+  const model = N.lifetimes(lifetimeState());
+  assertEqual(model.now, 1040);
+  assert(model.span > 0, "a span of zero divides by zero in the renderer");
+});
+
+check("a container that outlived its own start event is still placed", () => {
+  // The event history is bounded. A long-lived container can lose its start
+  // event and keep its stop event, which carries the lifetime.
+  const model = N.lifetimes({
+    instances: [], invocations: [],
+    metrics: { events: [
+      { instance: "old-1", function: "hello", kind: "stop", at: 2000, reason: "idle", lifetime_s: 120 },
+    ] },
+  });
+  assertEqual(model.lanes.length, 1);
+  assertEqual(model.lanes[0].born, 1880);
+});
+
+check("only the most recent lanes are drawn, and the note says so", () => {
+  const events = [];
+  for (let i = 0; i < 30; i += 1) {
+    events.push({ instance: "c-" + i, function: "hello", kind: "start", at: 1000 + i, cold_start_ms: 900 });
+    events.push({ instance: "c-" + i, function: "hello", kind: "stop", at: 1000 + i + 5, reason: "idle", lifetime_s: 5 });
+  }
+  const model = N.lifetimes({ instances: [], invocations: [], metrics: { events } }, 18);
+  assertEqual(model.lanes.length, 18);
+  assertEqual(model.total, 30);
+  assertEqual(model.hidden, 12);
+  assertIncludes(N.lifetimeNote(model), "18 most recent are drawn");
+});
+
+check("the lifetime note reports what the starts cost against what was kept", () => {
+  const note = N.lifetimeNote(N.lifetimes(lifetimeState()));
+  assertIncludes(note, "2 containers have run here");
+  assertIncludes(note, "bought no work at all");
+  assertIncludes(note, "stopped by the reaper");
+  assert(!/undefined|NaN/.test(note), note);
+});
+
+check("an empty platform is described as resting, not as broken", () => {
+  const note = N.lifetimeNote(N.lifetimes({ instances: [], invocations: [], metrics: { events: [] } }));
+  assertIncludes(note, "resting state");
+  assert(!note.includes("0 containers"), "do not open with a zero");
+});
+
+// -- where a cold start goes -----------------------------------------------
+
+check("the phases are medians, and their shares account for all of it", () => {
+  const phases = N.coldPhases(N.lifetimes(lifetimeState()));
+  assertEqual(phases.n, 2);
+  const labels = phases.parts.map((p) => p.label).join(",");
+  assertEqual(labels, "create,start,port,ready");
+  const share = phases.parts.reduce((t, p) => t + p.share, 0);
+  assert(Math.abs(share - 1) < 1e-9, `shares sum to ${share}`);
+  const ready = phases.parts.filter((p) => p.key === "ready_ms")[0];
+  assertEqual(ready.whose, "handler");
+  assert(ready.share > 0.6, "ready is most of a cold start and the note says so");
+});
+
+check("the phase note names the part a handler can actually change", () => {
+  const note = N.phaseNote(N.coldPhases(N.lifetimes(lifetimeState())));
+  assertIncludes(note, "Median of 2 cold starts");
+  assertIncludes(note, "belongs to the daemon");
+  assert(!/undefined|NaN/.test(note), note);
+});
+
+check("a platform at zero can still say where its cold starts went", () => {
+  // The phase breakdown lives on the start event, not only on the running
+  // container, so scaling to zero does not erase the answer.
+  const state = lifetimeState({ instances: [] });
+  const phases = N.coldPhases(N.lifetimes(state));
+  assertEqual(phases.n, 2);
+  assertIncludes(N.phaseNote(phases), "Median of 2 cold starts");
+});
+
+check("no cold start yet is an instruction, not an empty chart", () => {
+  const note = N.phaseNote(N.coldPhases(N.lifetimes({ instances: [], invocations: [], metrics: { events: [] } })));
+  assertIncludes(note, "Invoke a function that is at zero");
+});
+
+// -- the time axis ---------------------------------------------------------
+
+check("the time axis is marked at readable intervals and ends at now", () => {
+  const ticks = N.timeTicks({ t0: 0, now: 40, span: 40 });
+  assertEqual(ticks[0].label, "0s");
+  assertEqual(ticks[ticks.length - 1].label, "now");
+  assert(ticks.length >= 3 && ticks.length <= 8, `${ticks.length} ticks is not readable`);
+  // Nothing may be close enough to the right-hand end to print on top of
+  // "now", which is the one label that has to stay legible.
+  const last = ticks[ticks.length - 2];
+  assert(40 - last.at > 2, `a tick at ${last.at}s collides with "now"`);
+});
+
+check("a long session is not marked every second", () => {
+  const ticks = N.timeTicks({ t0: 0, now: 3000, span: 3000 });
+  assert(ticks.length <= 8, `${ticks.length} ticks across 50 minutes`);
+  assertEqual(ticks[ticks.length - 1].label, "now");
+});
+
 // -- the replay ------------------------------------------------------------
 //
 // A published copy of this page has no platform behind it and reads a
@@ -476,7 +638,35 @@ if (recordedDir) {
         assert(Number.isFinite(row.total), `step ${i}: invocation row ${JSON.stringify(row)}`);
       });
       assert(N.histogram(state.invocations, 22).bins.length >= 0);
+
+      // The two charts the page opens on, against every moment of the
+      // session rather than against one convenient one.
+      const model = N.lifetimes(state, 18);
+      assert(model.span > 0, `step ${i}: a lifetime window of zero`);
+      model.lanes.forEach((lane) => {
+        assert(lane.born <= lane.ready, `step ${i}: ${lane.name} was ready before it was born`);
+        assert(lane.stop === null || lane.stop >= lane.born,
+          `step ${i}: ${lane.name} stopped before it started`);
+        assert(lane.born >= model.t0 - 0.001, `step ${i}: ${lane.name} falls off the chart`);
+      });
+      [N.lifetimeNote(model), N.phaseNote(N.coldPhases(model))].forEach((note) => {
+        assert(note.length > 20 && !/undefined|NaN/.test(note), `step ${i}: "${note}"`);
+      });
+      N.timeTicks(model).forEach((tick) => {
+        assert(tick.label && !/undefined|NaN/.test(tick.label), `step ${i}: tick ${tick.label}`);
+      });
     });
+  });
+
+  check("the recording can say where its cold starts went", () => {
+    // Not from the live containers -- from the start events, which is what
+    // lets a snapshot taken at zero still answer the question.
+    const atZero = session.steps.filter((step) => !step.state.instances.length);
+    assert(atZero.length, "the session never reaches zero containers");
+    const answered = atZero.filter((step) => N.coldPhases(N.lifetimes(step.state, 18)).n > 0);
+    assert(answered.length,
+      "no snapshot at zero containers can break down a cold start, so the " +
+      "panel is empty exactly when scale-to-zero is being demonstrated");
   });
 
   check("pressing the buttons walks the recording and every line reads", () => {
