@@ -3,6 +3,7 @@
  *
  *   node scripts/check_console.mjs
  *   node scripts/check_console.mjs --health h.json --functions f.json
+ *   node scripts/check_console.mjs --recorded _site/recorded
  *
  * **Static.** Every id the script reaches for must exist in the markup. A typo
  * there is silent in a browser -- the element is null, the handler throws
@@ -14,9 +15,16 @@
  * platform payloads. They are the functions that turn container counts and
  * latency samples into claims, and a console that states a wrong claim
  * confidently is worse than one that renders nothing.
+ *
+ * **The recording.** With ``--recorded``, the bundle a published copy reads
+ * is checked the way the page reads it: the snapshots must render, the
+ * buttons must reach the steps they claim to, and the session must actually
+ * contain the cold start it was published to show. This is the only check
+ * that can fail on the deployed artefact rather than on the source, which is
+ * why it runs before a deploy and not after one.
  */
 
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import vm from "node:vm";
@@ -66,7 +74,12 @@ check("the page loads nothing from the network", () => {
   const external = [...html.matchAll(/(?:src|href)="([^"]+)"/g)]
     .map((m) => m[1]).filter((u) => /^(https?:)?\/\//.test(u));
   assertEqual(external.join(", "), "", "external resources found");
-  assert(!/<link\b/.test(html), "no stylesheet links expected");
+  // Every <link> has to be inline. The favicon is one: a page demoed offline
+  // that references a file it does not ship leaves a 404 in the console of
+  // everyone who opens it, which is a small thing that reads as carelessness.
+  const links = [...html.matchAll(/<link\b[^>]*href="([^"]+)"/g)].map((m) => m[1]);
+  const fetched = links.filter((url) => !url.startsWith("data:"));
+  assertEqual(fetched.join(", "), "", "a <link> points at something off the page");
 });
 
 check("every API path the console calls is one the server serves", () => {
@@ -308,9 +321,180 @@ check("missing data degrades to empty rather than throwing", () => {
   assertEqual(N.policyNote(null), "");
 });
 
+// -- the replay ------------------------------------------------------------
+//
+// A published copy of this page has no platform behind it and reads a
+// recording instead. Everything below is about the one failure that costs
+// the most and shows the least: a page that loads, renders, and is wrong,
+// because the recording did not hold what it asked for.
+
+check("the replay serves state from a snapshot and actions from a step", () => {
+  assertEqual(N.replayRoute("/api/health").state, "health");
+  assertEqual(N.replayRoute("/api/invocations?limit=2000").state, "invocations");
+  assertEqual(N.replayRoute("/api/metrics", "GET").state, "metrics");
+  assertEqual(N.replayRoute("/api/instances").state, "instances");
+  assert(N.replayRoute("/api/examples").examples, "the examples come from the bundle");
+  // A GET of /api/functions is the function list; a POST to it is a deploy.
+  // Confusing the two serves a list of functions as a deploy result.
+  assertEqual(N.replayRoute("/api/functions", "GET").state, "functions");
+  assertEqual(N.replayRoute("/api/functions", "POST").advance.join(), "deploy");
+  assertEqual(
+    N.replayRoute("/api/functions/hello/invoke", "POST").advance.join(),
+    "invoke,fail",
+    "pressing Invoke has to be able to reach a recorded failure"
+  );
+  // Nothing is deployed at step 0, so the select is empty and the path has a
+  // hole in it. Pressing Invoke there still means "show me an invocation".
+  assertEqual(N.replayRoute("/api/functions//invoke", "POST").advance.join(), "invoke,fail");
+  assertEqual(N.replayRoute("/api/functions/hello/scale-to-zero", "POST").advance.join(), "zero");
+  assertEqual(N.replayRoute("/api/policy/hello?target_cold_rate=0.05").advance.join(), "advise");
+  assert(N.replayRoute("/api/functions/hello", "DELETE").unsupported, "a delete is not replayable");
+});
+
+check("the replay knows every endpoint the page calls", () => {
+  // The regression this exists for: someone adds a call to the console, the
+  // live page is fine, and the published one answers it with an error nobody
+  // sees until a visitor presses the button.
+  const called = new Set([...source.matchAll(/api\("(\/api[^"?]*)/g)].map((m) => m[1]));
+  const answerable = new Set([
+    "/api/health", "/api/examples", "/api/functions", "/api/functions/",
+    "/api/instances", "/api/invocations", "/api/metrics", "/api/policy/",
+  ]);
+  const unknown = [...called].filter((path) => !answerable.has(path));
+  assertEqual(unknown.join(", "), "", "the page calls something the replay cannot answer");
+});
+
+check("stepping forward wraps, so the buttons never stop answering", () => {
+  const steps = [{ kind: "boot" }, { kind: "invoke" }, { kind: "zero" }, { kind: "invoke" }];
+  assertEqual(N.nextStepIndex(steps, 0, ["invoke"]).index, 1);
+  assertEqual(N.nextStepIndex(steps, 1, ["invoke"]).index, 3);
+  const wrapped = N.nextStepIndex(steps, 3, ["invoke"]);
+  assertEqual(wrapped.index, 1);
+  assertEqual(wrapped.wrapped, true);
+  assertEqual(N.nextStepIndex(steps, 0, ["advise"]).index, -1);
+  const advises = [{ kind: "advise", rate_pct: 5 }, { kind: "advise", rate_pct: 1 }];
+  assertEqual(N.nextStepIndex(advises, -1, ["advise"], (s) => s.rate_pct === 1).index, 1);
+});
+
+check("a recording that does not hold what the page reads is refused", () => {
+  assertEqual(N.replayProblems(null).length, 1);
+  assert(N.replayProblems({ format: 2 }).some((p) => p.includes("format")));
+  const thin = {
+    format: 1, recorded_at: "2026-11-11T00:00:00Z", host: { docker: "27.0" },
+    examples: [{ name: "hello" }],
+    steps: [{ i: 0, kind: "boot", label: "l", note: "n", state: {} }],
+  };
+  const problems = N.replayProblems(thin);
+  assert(problems.some((p) => p.includes("no health snapshot")), "missing snapshots must be caught");
+  assert(problems.some((p) => p.includes("no deploy step")), "missing kinds must be caught");
+  // A recording made with no Docker behind it is a drawing of a platform.
+  const faked = JSON.parse(JSON.stringify(thin));
+  faked.steps[0].state = {
+    health: { docker: false }, functions: [], instances: [], invocations: [],
+    metrics: { overall: {} },
+  };
+  assert(
+    N.replayProblems(faked).some((p) => p.includes("no Docker")),
+    "a recording of a degraded platform must be caught"
+  );
+});
+
+const recordedDir = (() => {
+  const i = process.argv.indexOf("--recorded");
+  return i > -1 ? process.argv[i + 1] : null;
+})();
+
+if (recordedDir) {
+  const session = JSON.parse(readFileSync(resolve(recordedDir, "session.json"), "utf8"));
+  const manifest = JSON.parse(readFileSync(resolve(recordedDir, "manifest.json"), "utf8"));
+
+  check("the bundle is the shape the page reads", () => {
+    assertEqual(N.replayProblems(session).join("; "), "");
+    assertEqual(manifest.format, 1);
+    assertEqual(manifest.recorded_at, session.recorded_at);
+    assertEqual(manifest.steps.length, session.steps.length);
+  });
+
+  check("the page says where its numbers came from", () => {
+    const headline = N.replayHeadline(session);
+    assertIncludes(headline, "recording");
+    assertIncludes(headline, String(session.host.docker));
+    assertIncludes(headline, session.recorded_at.slice(0, 10));
+    assertEqual(N.replayChips(session, 3).filter((c) => c.current).length, 1);
+  });
+
+  check("every snapshot renders without inventing a number", () => {
+    session.steps.forEach((step, i) => {
+      const state = step.state;
+      N.platformTiles(state.health).forEach((tile) => {
+        assert(tile.value !== "undefined" && tile.value !== "NaN",
+          `step ${i}: the ${tile.label} tile is ${tile.value}`);
+      });
+      [N.platformNote(state.health), N.instanceNote(state.instances, state.functions),
+       N.histNote(state.metrics.overall)].forEach((note) => {
+        assert(note.length > 10, `step ${i}: an empty note`);
+        assert(!/undefined|NaN/.test(note), `step ${i}: a note reads "${note}"`);
+      });
+      N.functionRows(state.functions).forEach((row) => {
+        assert(row.name && Number.isFinite(row.invocations),
+          `step ${i}: function row ${JSON.stringify(row)}`);
+      });
+      N.instanceRows(state.instances).forEach((row) => {
+        assert(row.name && Number.isFinite(row.age), `step ${i}: container row ${JSON.stringify(row)}`);
+      });
+      N.recentRows(state.invocations, 12).forEach((row) => {
+        assert(Number.isFinite(row.total), `step ${i}: invocation row ${JSON.stringify(row)}`);
+      });
+      assert(N.histogram(state.invocations, 22).bins.length >= 0);
+    });
+  });
+
+  check("pressing the buttons walks the recording and every line reads", () => {
+    let cursor = 0;
+    const press = (kinds, match) => {
+      const found = N.nextStepIndex(session.steps, cursor, kinds, match);
+      assert(found.index >= 0, `nothing to reach for ${kinds.join("/")}`);
+      cursor = found.index;
+      return session.steps[cursor];
+    };
+    assertIncludes(N.deployLine(press(["deploy"]).response.body), "deployed ");
+    // The first invocation in the session has to be a cold one, or the page
+    // opens on the one claim the whole project is about and cannot show it.
+    assertIncludes(N.invokeLine(press(["invoke", "fail"]).response.body), "COLD");
+    assertIncludes(N.invokeLine(press(["invoke", "fail"]).response.body), "warm");
+    assertIncludes(N.burstLine(press(["burst"]).response.body), "concurrent invocations");
+    assertIncludes(N.zeroLine(press(["zero"]).response.body), "stopped ");
+    const advise = press(["advise"], (step) => step.rate_pct === 5);
+    const rows = N.policyRows(advise.response.body);
+    assert(rows.length > 3, "the sweep is too short to show a trade-off");
+    assertEqual(rows.filter((row) => row.recommended).length, 1);
+    assertIncludes(N.policyNote(advise.response.body), "invocations of this function");
+  });
+
+  check("the recording shows the gap it is published to show", () => {
+    const bodies = session.steps
+      .filter((step) => (step.kind === "invoke" || step.kind === "fail") && step.response)
+      .map((step) => step.response.body)
+      .filter((body) => body && Number.isFinite(body.total_ms));
+    const cold = bodies.filter((body) => body.cold).map((body) => body.total_ms);
+    const warm = bodies.filter((body) => !body.cold).map((body) => body.total_ms);
+    assert(cold.length && warm.length, "the session has to contain both a cold and a warm call");
+    assert(Math.min(...cold) > Math.max(...warm) * 5,
+      `the cold start (${Math.min(...cold)}ms) is not clearly slower than a warm call ` +
+      `(${Math.max(...warm)}ms), so the page illustrates nothing`);
+  });
+
+  check("the published page is the page in this repository", () => {
+    const index = resolve(recordedDir, "..", "index.html");
+    if (!existsSync(index)) return;
+    assertEqual(readFileSync(index, "utf8"), html,
+      "the site's index.html is not web/index.html");
+  });
+}
+
 // -- report ----------------------------------------------------------------
 
-const label = live ? "live payloads" : "canned fixtures";
+const label = recordedDir ? `recording in ${recordedDir}` : live ? "live payloads" : "canned fixtures";
 if (failures.length) {
   console.error(`console check FAILED on the ${label}`);
   for (const failure of failures) console.error(`  x ${failure.name}\n      ${failure.message}`);

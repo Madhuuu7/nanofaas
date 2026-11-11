@@ -9,6 +9,7 @@ need it.
 
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -244,9 +245,15 @@ def test_the_page_is_self_contained():
     """No CDN, no font host, no analytics: a control plane that phones out
     while you are debugging an outage is not one to ship."""
     html = (ROOT / "web" / "index.html").read_text(encoding="utf-8")
-    assert "http://" not in html
-    assert "https://" not in html
-    assert "<link" not in html
+    fetched = re.findall(r'(?:src|href)="((?:https?:)?//[^"]*)"', html)
+    assert fetched == [], f"the page fetches {fetched}"
+    # Every <link> has to be inline too. The favicon is a data: URI, and the
+    # `http://www.w3.org/2000/svg` inside it is an XML namespace rather than
+    # an address -- no browser resolves it -- which is why this looks at what
+    # an attribute points at and not at whether the file contains a URL.
+    links = re.findall(r'<link\b[^>]*href="([^"]+)"', html)
+    assert links, "the page should ship its own favicon rather than 404 for one"
+    assert all(link.startswith("data:") for link in links), links
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
