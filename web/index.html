@@ -4,6 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>nanofaas</title>
+<!-- Inline, because the page is demoed offline and a missing favicon
+     is a 404 in everyone's console every time they open it. -->
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 32 32%27%3E%3Crect width=%2732%27 height=%2732%27 rx=%277%27 fill=%27%230c0f13%27/%3E%3Crect x=%276%27 y=%2718%27 width=%275%27 height=%278%27 fill=%27%2345d1a0%27/%3E%3Crect x=%2713.5%27 y=%2712%27 width=%275%27 height=%2714%27 fill=%27%2345d1a0%27/%3E%3Crect x=%2721%27 y=%276%27 width=%275%27 height=%2720%27 fill=%27%23ff9f45%27/%3E%3C/svg%3E">
 <style>
   :root {
     --bg: #0c0f13; --panel: #141922; --panel-2: #1b2230; --line: #262f3d;
@@ -24,6 +27,12 @@
   .two { display: grid; gap: 15px; grid-template-columns: 1fr 1fr; }
   .three { display: grid; gap: 15px; grid-template-columns: 1.1fr 1fr 1fr; }
   @media (max-width: 1000px) { .two, .three { grid-template-columns: 1fr; } }
+  /* A grid item is `min-width: auto` by default, so a wide table or a long
+     line in a <pre> pushes the column past the viewport and drags the whole
+     page sideways on a phone. The scroll belongs to the thing that is too
+     wide, which is what the overflow rules below give it. */
+  .two > *, .three > * { min-width: 0; }
+  .scroll { overflow-x: auto; }
   label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 5px; }
   select, input, textarea {
     width: 100%; background: var(--panel-2); color: var(--ink); border: 1px solid var(--line);
@@ -36,6 +45,7 @@
   button.ghost { background: transparent; color: var(--muted); border: 1px solid var(--line); }
   button:disabled { opacity: .55; cursor: progress; }
   table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .panel { min-width: 0; }
   th { text-align: left; font: 600 11px/1 var(--sans); letter-spacing: .06em; text-transform: uppercase; color: var(--dim); padding: 0 8px 7px; border-bottom: 1px solid var(--line); }
   td { padding: 6px 8px; border-bottom: 1px solid rgba(38,47,61,.55); font-family: var(--mono); font-size: 12.5px; }
   td.name { font-family: var(--sans); font-size: 13px; }
@@ -57,8 +67,27 @@
   .axlabel { fill: var(--dim); font: 10px var(--mono); }
   .legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 11.5px; color: var(--muted); margin-top: 8px; }
   .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
-  pre.out { background: var(--panel-2); border: 1px solid var(--line); border-radius: 6px; padding: 10px; font: 12px var(--mono); overflow-x: auto; margin: 10px 0 0; max-height: 220px; }
+  pre.out { background: var(--panel-2); border: 1px solid var(--line); border-radius: 6px; padding: 10px; font: 12px var(--mono); overflow-x: auto; margin: 10px 0 0; max-height: 220px; min-width: 0;
+             white-space: pre-wrap; overflow-wrap: anywhere; }
   .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
+  /* The replay strip: only on a published copy, where there is no platform. */
+  .replay { border-bottom: 1px solid var(--line); background: var(--panel); padding: 14px 26px 15px; }
+  .replay .head { display: flex; gap: 11px; align-items: start; }
+  .replay .note { margin: 0; max-width: 104ch; }
+  .tag { flex: none; font: 600 10.5px/1.5 var(--sans); letter-spacing: .11em; text-transform: uppercase;
+         color: var(--cold); border: 1px solid rgba(255,159,69,.45); background: rgba(255,159,69,.1);
+         border-radius: 99px; padding: 2px 9px; }
+  .chips { display: flex; gap: 6px; flex-wrap: wrap; margin: 12px 0 0; }
+  .chip { font: 11.5px var(--mono); color: var(--muted); background: var(--panel-2);
+          border: 1px solid var(--line); border-radius: 99px; padding: 3px 10px; cursor: pointer; }
+  .chip:hover { color: var(--ink); border-color: var(--dim); }
+  .chip.done { color: var(--dim); }
+  .chip.current { color: #05121f; background: var(--accent); border-color: var(--accent); font-weight: 600; }
+  .replay .now { display: flex; gap: 10px; align-items: baseline; margin-top: 12px; flex-wrap: wrap; }
+  .replay .now button { padding: 5px 11px; font-size: 12.5px; }
+  .replay .now .step { font: 600 13px var(--mono); color: var(--ink); flex: 1 1 100%; min-width: 0; }
+  @media (min-width: 620px) { .replay .now .step { flex: 1 1 24ch; } }
+  @media (max-width: 760px) { .replay { padding: 13px 16px 14px; } }
 </style>
 </head>
 <body>
@@ -71,6 +100,20 @@
     recommends the idle timeout your own traffic argues for.
   </p>
 </header>
+
+<div class="replay" id="replaybar" hidden>
+  <div class="head">
+    <span class="tag">replay</span>
+    <p class="note" id="replayhead"></p>
+  </div>
+  <div class="chips" id="replaysteps"></div>
+  <div class="now">
+    <button class="ghost" id="replayprev">&#9664; back</button>
+    <button class="ghost" id="replaynext">next &#9654;</button>
+    <span class="step" id="replaystep"></span>
+  </div>
+  <p class="note" id="replaynote"></p>
+</div>
 
 <main>
   <section>
@@ -120,16 +163,16 @@
     <div class="three">
       <div class="panel">
         <h2 style="margin-top:0">Functions</h2>
-        <table id="functions"></table>
+        <div class="scroll"><table id="functions"></table></div>
       </div>
       <div class="panel">
         <h2 style="margin-top:0">Live containers</h2>
-        <table id="instances"></table>
+        <div class="scroll"><table id="instances"></table></div>
         <p class="note" id="instancenote"></p>
       </div>
       <div class="panel">
         <h2 style="margin-top:0">Recent invocations</h2>
-        <table id="recent"></table>
+        <div class="scroll"><table id="recent"></table></div>
       </div>
     </div>
   </section>
@@ -151,7 +194,7 @@
           <div><label for="targetrate">Target cold-start rate</label><input id="targetrate" type="number" value="5" min="1" max="50" step="1"></div>
           <div style="flex:0 0 auto"><button id="advise" class="ghost">Recommend</button></div>
         </div>
-        <table id="policy"></table>
+        <div class="scroll"><table id="policy"></table></div>
         <p class="note" id="policynote">Invoke a function a few times, then ask. A recommendation from four requests is a recommendation about noise.</p>
       </div>
     </div>
@@ -372,6 +415,173 @@ N.policyNote = function (report) {
     ". It is currently set to " + observed.current_idle_timeout_s + "s.";
 };
 
+/* ------------------------------------------------------------------ *
+ * What the action panes say.
+ *
+ * Pure, and shared by the two ways a line can get there: a live call
+ * that just returned, and a recorded step being replayed. One formatter
+ * for both, or the published page quietly starts describing the same
+ * platform in different words from the local one.
+ * ------------------------------------------------------------------ */
+
+N.deployLine = function (result) {
+  const image = result.image || {};
+  return "deployed " + result.function.name + " -- image " +
+    (image.cached ? "reused" : "built in " + N.fmtMs(image.build_ms)) +
+    ", " + image.size_mb + " MB";
+};
+
+N.invokeLine = function (result) {
+  return (result.cold ? "COLD " : "warm ") + N.fmtMs(result.total_ms) +
+    "  (cold start " + N.fmtMs(result.cold_start_ms) + ", queued " + N.fmtMs(result.queued_ms) +
+    ", exec " + N.fmtMs(result.exec_ms) + ")\n" +
+    JSON.stringify(result.body, null, 2);
+};
+
+N.burstLine = function (summary) {
+  return "10 concurrent invocations: " + summary.ok + " ok, " +
+    summary.cold_starts + " cold starts\n" +
+    "p50 " + N.fmtMs(summary.p50_ms) + "  p95 " + N.fmtMs(summary.p95_ms) +
+    "  max " + N.fmtMs(summary.max_ms);
+};
+
+N.zeroLine = function (result) {
+  return "stopped " + result.stopped +
+    " container(s); the next request pays a cold start";
+};
+
+/* ------------------------------------------------------------------ *
+ * The replay.
+ *
+ * This page is a client of a control plane whose data plane is the
+ * Docker daemon. Published on GitHub Pages it has neither, so it reads
+ * a recording of a session that really ran instead -- the same five GET
+ * responses it would have polled, stored after every step. These
+ * helpers are the whole of the substitution: which request a snapshot
+ * answers, which step a button moves to, and what the page says it is
+ * showing. Live, none of them run.
+ * ------------------------------------------------------------------ */
+
+/** Which part of a recorded step answers this request. */
+N.replayRoute = function (path, method) {
+  const verb = String(method || "GET").toUpperCase();
+  const clean = String(path).split("?")[0];
+  if (verb === "GET") {
+    const states = {
+      "/api/health": "health",
+      "/api/functions": "functions",
+      "/api/instances": "instances",
+      "/api/invocations": "invocations",
+      "/api/metrics": "metrics",
+    };
+    if (states[clean]) return { state: states[clean] };
+    if (clean === "/api/examples") return { examples: true };
+    if (clean.indexOf("/api/policy/") === 0) return { advance: ["advise"] };
+  }
+  if (verb === "POST") {
+    if (clean === "/api/functions") return { advance: ["deploy"] };
+    // A failing invocation is its own kind of step, and pressing Invoke has
+    // to be able to reach it: a replay that can only show the calls that
+    // worked is an advertisement.
+    // `[^/]*`, not `[^/]+`: at step 0 nothing is deployed, so the function
+    // select is empty and the path has a hole in it. Pressing Invoke there
+    // is a fair thing to do -- it means "show me an invocation" -- and the
+    // step, not the URL, is what says which function that was.
+    if (/^\/api\/functions\/[^/]*\/invoke$/.test(clean)) return { advance: ["invoke", "fail"] };
+    if (/^\/api\/functions\/[^/]*\/scale-to-zero$/.test(clean)) return { advance: ["zero"] };
+  }
+  return { unsupported: clean };
+};
+
+/**
+ * The next step of one of `kinds` after `cursor`, wrapping to the start.
+ *
+ * Wrapping, rather than stopping dead at the last one, is what lets the
+ * buttons stay pressable: a visitor who presses Invoke six times should
+ * see the cold start again, not a page that stops answering.
+ */
+N.nextStepIndex = function (steps, cursor, kinds, match) {
+  const all = steps || [];
+  const wanted = function (step) {
+    return kinds.indexOf(step.kind) !== -1 && (!match || match(step));
+  };
+  for (let i = cursor + 1; i < all.length; i += 1) {
+    if (wanted(all[i])) return { index: i, wrapped: false };
+  }
+  for (let i = 0; i <= cursor && i < all.length; i += 1) {
+    if (wanted(all[i])) return { index: i, wrapped: true };
+  }
+  return { index: -1, wrapped: false };
+};
+
+N.recordedRates = function (session) {
+  return ((session || {}).steps || [])
+    .filter(function (s) { return s.kind === "advise" && s.rate_pct; })
+    .map(function (s) { return s.rate_pct; });
+};
+
+/** What the page says it is, before anyone reads a number off it. */
+N.replayHeadline = function (session) {
+  const host = session.host || {};
+  const when = String(session.recorded_at || "").replace("T", " ").replace("Z", " UTC");
+  const where = [
+    host.docker ? "Docker " + host.docker : null,
+    host.os || null,
+    host.cpus ? host.cpus + " CPUs" : null,
+  ].filter(Boolean).join(", ");
+  return "A recording, not a live platform. This console drove the real " +
+    "control plane on " + when + " (" + where + ") and every number below " +
+    "was measured there, on real containers. GitHub Pages serves files, not " +
+    "containers, so the page replays what it saw instead of pretending to " +
+    "deploy. The buttons still work: each one steps to the moment it was " +
+    "really pressed.";
+};
+
+N.replayChips = function (session, cursor) {
+  return ((session || {}).steps || []).map(function (step, i) {
+    return {
+      i: i,
+      kind: step.kind,
+      label: step.label,
+      current: i === cursor,
+      done: i < cursor,
+    };
+  });
+};
+
+/** Is this bundle the shape the page reads? Used by the headless check. */
+N.replayProblems = function (session) {
+  const problems = [];
+  if (!session || typeof session !== "object") return ["the recording is not an object"];
+  if (session.format !== 1) problems.push("unknown recording format: " + session.format);
+  if (!session.recorded_at) problems.push("the recording does not say when it was made");
+  if (!session.host || !session.host.docker) problems.push("the recording does not say what it ran on");
+  const steps = session.steps || [];
+  if (steps.length < 8) problems.push("only " + steps.length + " steps were recorded");
+  const kinds = {};
+  steps.forEach(function (step, i) {
+    kinds[step.kind] = true;
+    if (step.i !== i) problems.push("step " + i + " is numbered " + step.i);
+    if (!step.label) problems.push("step " + i + " has no label");
+    if (!step.note) problems.push("step " + i + " has no note");
+    const state = step.state || {};
+    ["health", "functions", "instances", "invocations", "metrics"].forEach(function (key) {
+      if (state[key] === undefined) problems.push("step " + i + " has no " + key + " snapshot");
+    });
+    if (state.health && state.health.docker !== true) {
+      problems.push("step " + i + " was recorded against a platform with no Docker");
+    }
+    if (step.kind !== "boot" && step.kind !== "traffic" && !step.response) {
+      problems.push("step " + i + " (" + step.kind + ") recorded no response");
+    }
+  });
+  ["boot", "deploy", "invoke", "burst", "zero", "fail", "traffic", "advise"].forEach(function (kind) {
+    if (!kinds[kind]) problems.push("no " + kind + " step is in the recording");
+  });
+  if (!(session.examples || []).length) problems.push("the recording carries no examples");
+  return problems;
+};
+
 if (typeof module !== "undefined" && module.exports) module.exports = N;
 if (typeof window !== "undefined") window.NANOFAAS = N;
 
@@ -391,8 +601,10 @@ if (typeof document !== "undefined" && document.getElementById) {
   let examples = [];
   let selected = null;
   let polling = null;
+  //: Set only on a published copy: { session, cursor, aside }.
+  let replay = null;
 
-  const api = async function (path, options) {
+  const live = async function (path, options) {
     const response = await fetch(path, options);
     const text = await response.text();
     let body = null;
@@ -402,6 +614,57 @@ if (typeof document !== "undefined" && document.getElementById) {
       throw new Error(typeof detail === "string" ? detail : JSON.stringify(detail));
     }
     return body;
+  };
+
+  /**
+   * The recording, answering as the platform.
+   *
+   * A GET is served from the snapshot at the cursor. A POST -- deploy,
+   * invoke, scale to zero -- moves the cursor to the step where that really
+   * happened and returns what the platform really answered, including its
+   * errors, so every handler below is the same code in both modes.
+   */
+  const recorded = async function (path, options) {
+    const route = N.replayRoute(path, (options || {}).method);
+    const steps = replay.session.steps;
+    if (route.state) return steps[replay.cursor].state[route.state];
+    if (route.examples) return replay.session.examples || [];
+    if (route.advance) {
+      let found = null;
+      if (route.advance[0] === "advise") {
+        const asked = Math.round(Number(String(path).split("target_cold_rate=")[1]) * 100);
+        const exact = N.nextStepIndex(steps, replay.cursor, ["advise"], function (step) {
+          return step.rate_pct === asked;
+        });
+        if (exact.index >= 0) {
+          found = exact;
+        } else {
+          replay.aside = "The recording has a recommendation for " +
+            N.recordedRates(replay.session).join("% and ") + "%, not " + asked +
+            "%. Showing the nearest recorded one -- the sweep it came from is " +
+            "the same table either way.";
+        }
+      }
+      found = found || N.nextStepIndex(steps, replay.cursor, route.advance);
+      if (found.index < 0) {
+        throw new Error("this is a replay, and no " + route.advance.join(" or ") +
+          " step was recorded in it");
+      }
+      goTo(found.index, { wrapped: found.wrapped, silent: true });
+      const response = steps[found.index].response || { status: 200, body: null };
+      if (response.status >= 400) {
+        const detail = response.body && response.body.detail;
+        throw new Error(typeof detail === "string" ? detail : JSON.stringify(response.body));
+      }
+      return response.body;
+    }
+    throw new Error("this is a replay of a recorded session, and " +
+      (route.unsupported || path) + " is not in it. Run the platform locally " +
+      "for a console that answers everything.");
+  };
+
+  const api = async function (path, options) {
+    return replay ? recorded(path, options) : live(path, options);
   };
 
   const show = function (id, content, isError) {
@@ -515,6 +778,154 @@ if (typeof document !== "undefined" && document.getElementById) {
     $("policynote").textContent = N.policyNote(report);
   };
 
+  /* -- the replay's own surface ------------------------------------- */
+
+  const renderReplay = function () {
+    const session = replay.session;
+    const step = session.steps[replay.cursor];
+    $("replaysteps").innerHTML = N.replayChips(session, replay.cursor).map(function (chip) {
+      return '<button class="chip' + (chip.current ? " current" : chip.done ? " done" : "") +
+        '" data-step="' + chip.i + '" title="' + esc(chip.label) + '">' +
+        chip.i + ". " + esc(chip.kind) + "</button>";
+    }).join("");
+    Array.prototype.forEach.call($("replaysteps").querySelectorAll("button[data-step]"), function (button) {
+      button.addEventListener("click", function () {
+        goTo(Number(button.getAttribute("data-step")), {});
+      });
+    });
+    $("replaystep").textContent = "step " + replay.cursor + " of " +
+      (session.steps.length - 1) + " -- " + step.label;
+    $("replaynote").textContent = step.note + (replay.aside ? "  " + replay.aside : "");
+    $("replayprev").disabled = replay.cursor === 0;
+    $("replaynext").disabled = replay.cursor === session.steps.length - 1;
+  };
+
+  /** Put the form where it was when this step happened. */
+  const syncInputs = function (step) {
+    const request = step.request || {};
+    if (step.kind === "deploy") {
+      $("name").value = request.name || "";
+      $("source").value = request.source || "";
+      ["memory_mb", "cpus", "concurrency", "max_instances", "idle_timeout_s"].forEach(function (key) {
+        if (request[key] !== undefined) $(key).value = request[key];
+      });
+    }
+    if (step.kind === "invoke" || step.kind === "fail") {
+      $("event").value = JSON.stringify(request);
+    }
+    if (step.target) {
+      selected = step.target;
+      if ($("target").querySelector('option[value="' + step.target + '"]')) {
+        $("target").value = step.target;
+      }
+    }
+  };
+
+  /** The pane a step wrote, in the words the live console uses. */
+  const renderStepOutput = function (step) {
+    const response = step.response || {};
+    const body = response.body;
+    if (response.status >= 400) {
+      const detail = body && body.detail;
+      show(step.kind === "deploy" ? "deployout" : "invokeout",
+        typeof detail === "string" ? detail : JSON.stringify(body), true);
+      return;
+    }
+    if (step.kind === "deploy") show("deployout", N.deployLine(body));
+    else if (step.kind === "invoke") show("invokeout", N.invokeLine(body));
+    else if (step.kind === "fail") show("invokeout", N.invokeLine(body), body && body.ok === false);
+    else if (step.kind === "burst") show("invokeout", N.burstLine(body));
+    else if (step.kind === "zero") show("invokeout", N.zeroLine(body));
+    else if (step.kind === "advise") renderPolicy(body);
+    else if (step.kind === "traffic") {
+      show("invokeout", body.requests + " invocations over " + body.duration_s +
+        "s at about " + body.rate_per_minute + " a minute, gaps drawn from an " +
+        "exponential distribution");
+    }
+  };
+
+  /**
+   * Move the replay to one step.
+   *
+   * `silent` is for the buttons: the handler that triggered the move does
+   * its own refresh and writes its own output line, which is the point of
+   * routing them through the recording rather than around it.
+   */
+  function goTo(index, options) {
+    const opts = options || {};
+    replay.cursor = index;
+    const step = replay.session.steps[index];
+    syncInputs(step);
+    renderReplay();
+    if (!opts.silent) {
+      refresh().then(function () { renderStepOutput(step); });
+    }
+  }
+
+  const burstReplay = async function () {
+    const found = N.nextStepIndex(replay.session.steps, replay.cursor, ["burst"]);
+    if (found.index < 0) {
+      show("invokeout", "no burst was recorded in this session", true);
+      return;
+    }
+    goTo(found.index, { silent: true });
+    await refresh();
+    show("invokeout", N.burstLine(replay.session.steps[found.index].response.body));
+  };
+
+  /** Inputs the replay cannot honour, turned off rather than left lying. */
+  const freezeInputs = function () {
+    const why = "This is a replay of a recorded session. The recording holds " +
+      "what was really deployed and invoked, so this field cannot change it. " +
+      "Run the platform locally for a console that can.";
+    ["name", "source", "example", "memory_mb", "cpus", "concurrency",
+     "max_instances", "idle_timeout_s", "event", "target"].forEach(function (id) {
+      $(id).disabled = true;
+      $(id).title = why;
+    });
+    $("policynote").textContent = "Recorded: the recommendation below came " +
+      "from this function's own arrival gaps and its own measured cold start " +
+      "during the session. Ask for 5% or 1% and the replay has the real " +
+      "answer for it.";
+  };
+
+  const loadRecording = async function () {
+    // A reachable platform always wins. Asking it first rather than looking
+    // for the recording first is what keeps the page honest when both exist:
+    // the repository has a recording in `web/` after a local build, and that
+    // directory is also served next to the console, so a page that preferred
+    // the file would replay last week's session while a live platform sat
+    // behind it answering.
+    try {
+      await live("/api/health");
+      return null;
+    } catch (err) {
+      /* no platform here: fall through and look for a recording */
+    }
+    let session = null;
+    try {
+      const manifest = await fetch("recorded/manifest.json", { cache: "no-store" });
+      if (!manifest.ok) return null;
+      const index = await manifest.json();
+      if (!index || index.format !== 1) return null;
+      const response = await fetch("recorded/session.json", { cache: "no-store" });
+      if (!response.ok) return null;
+      session = await response.json();
+    } catch (err) {
+      return null;
+    }
+    const problems = N.replayProblems(session);
+    if (problems.length) {
+      // A recording that does not hold what the page reads is a broken build,
+      // not something to paper over with a page that half works.
+      $("replaybar").hidden = false;
+      $("replayhead").innerHTML = '<span class="err">this page was published with ' +
+        "an unusable recording: " + esc(problems[0]) + "</span>";
+      return null;
+    }
+    return session;
+  };
+
   const refresh = async function () {
     try {
       const health = await api("/api/health");
@@ -555,10 +966,7 @@ if (typeof document !== "undefined" && document.getElementById) {
         body: JSON.stringify(body),
       });
       selected = result.function.name;
-      show("deployout",
-        "deployed " + result.function.name + " -- image " +
-        (result.image.cached ? "reused" : "built in " + N.fmtMs(result.image.build_ms)) +
-        ", " + result.image.size_mb + " MB");
+      show("deployout", N.deployLine(result));
       await refresh();
     } catch (err) {
       show("deployout", err.message, true);
@@ -584,13 +992,7 @@ if (typeof document !== "undefined" && document.getElementById) {
     button.disabled = true;
     try {
       const r = await invokeOnce();
-      if (r) {
-        show("invokeout",
-          (r.cold ? "COLD " : "warm ") + N.fmtMs(r.total_ms) +
-          "  (cold start " + N.fmtMs(r.cold_start_ms) + ", queued " + N.fmtMs(r.queued_ms) +
-          ", exec " + N.fmtMs(r.exec_ms) + ")\n" +
-          JSON.stringify(r.body, null, 2));
-      }
+      if (r) show("invokeout", N.invokeLine(r), r.ok === false);
       await refresh();
     } catch (err) {
       show("invokeout", err.message, true);
@@ -609,11 +1011,13 @@ if (typeof document !== "undefined" && document.getElementById) {
       const ok = results.filter(function (r) { return r.status === "fulfilled" && r.value; });
       const cold = ok.filter(function (r) { return r.value.cold; }).length;
       const times = ok.map(function (r) { return r.value.total_ms; }).sort(function (a, b) { return a - b; });
-      show("invokeout",
-        "10 concurrent invocations: " + ok.length + " ok, " + cold + " cold starts\n" +
-        "p50 " + N.fmtMs(times[Math.floor(times.length / 2)]) +
-        "  p95 " + N.fmtMs(times[Math.floor(times.length * 0.95)]) +
-        "  max " + N.fmtMs(times[times.length - 1]));
+      show("invokeout", N.burstLine({
+        ok: ok.length,
+        cold_starts: cold,
+        p50_ms: times[Math.floor(times.length / 2)],
+        p95_ms: times[Math.floor(times.length * 0.95)],
+        max_ms: times[times.length - 1],
+      }));
       await refresh();
     } catch (err) {
       show("invokeout", err.message, true);
@@ -625,7 +1029,7 @@ if (typeof document !== "undefined" && document.getElementById) {
   const scaleToZero = async function () {
     try {
       const r = await api("/api/functions/" + encodeURIComponent($("target").value) + "/scale-to-zero", { method: "POST" });
-      show("invokeout", "stopped " + r.stopped + " container(s); the next request pays a cold start");
+      show("invokeout", N.zeroLine(r));
       await refresh();
     } catch (err) {
       show("invokeout", err.message, true);
@@ -643,6 +1047,20 @@ if (typeof document !== "undefined" && document.getElementById) {
   };
 
   window.addEventListener("DOMContentLoaded", async function () {
+    const session = await loadRecording();
+    if (session) {
+      replay = { session: session, cursor: 0, aside: "" };
+      $("replaybar").hidden = false;
+      $("replayhead").textContent = N.replayHeadline(session);
+      freezeInputs();
+      $("replayprev").addEventListener("click", function () {
+        goTo(Math.max(0, replay.cursor - 1), {});
+      });
+      $("replaynext").addEventListener("click", function () {
+        goTo(Math.min(session.steps.length - 1, replay.cursor + 1), {});
+      });
+    }
+
     try {
       examples = await api("/api/examples");
       $("example").innerHTML = examples.map(function (e) {
@@ -658,10 +1076,18 @@ if (typeof document !== "undefined" && document.getElementById) {
 
     $("deploy").addEventListener("click", deploy);
     $("invoke").addEventListener("click", invoke);
-    $("burst").addEventListener("click", burst);
+    // Ten concurrent requests is one recorded step rather than ten: the
+    // burst is interesting because of what the pool did while they
+    // contended, which is a property of the moment and not of each call.
+    $("burst").addEventListener("click", replay ? burstReplay : burst);
     $("zero").addEventListener("click", scaleToZero);
     $("advise").addEventListener("click", advise);
     await refresh();
+    if (replay) {
+      renderReplay();
+      renderStepOutput(replay.session.steps[replay.cursor]);
+      return;
+    }
     // Containers disappear on their own, so the page has to keep looking or
     // it shows a platform that stopped existing ten seconds ago.
     polling = setInterval(refresh, 2000);
