@@ -225,8 +225,8 @@
     </div>
     <div class="chips" id="replaysteps"></div>
     <div class="now">
-      <button class="ghost" id="replayprev">&#9664; back</button>
-      <button class="ghost" id="replaynext">next &#9654;</button>
+      <button class="ghost" id="replayprev" title="or press the left arrow key">&#9664; back</button>
+      <button class="ghost" id="replaynext" title="or press the right arrow key">next &#9654;</button>
       <span class="step" id="replaystep"></span>
     </div>
     <p class="note" id="replaynote"></p>
@@ -845,8 +845,30 @@ N.lifetimes = function (state, limit) {
   };
 };
 
+/**
+ * Memory held by every container on the chart, in GB-seconds.
+ *
+ * The same unit the idle-timeout table trades in, so the two panels can be
+ * read against each other: the sweep says what a longer timeout would cost,
+ * and this says what the traffic already did cost.
+ */
+N.containerCost = function (model, functions) {
+  const memory = {};
+  (functions || []).forEach(function (f) { memory[f.name] = f.memory_mb; });
+  let gbSeconds = 0;
+  let priced = 0;
+  ((model || {}).lanes || []).forEach(function (row) {
+    const mb = memory[row.function];
+    if (!mb) return;
+    priced += 1;
+    const until = row.stop === null ? model.now : row.stop;
+    gbSeconds += (mb / 1024) * Math.max(until - row.born, 0);
+  });
+  return { gbSeconds: gbSeconds, priced: priced };
+};
+
 /** What the lifetime chart adds up to, in words. */
-N.lifetimeNote = function (model) {
+N.lifetimeNote = function (model, functions) {
   if (!model || !model.total) {
     return "No container has run yet. On this platform that is the resting " +
       "state rather than an outage: deploy a function and invoke it, and one " +
@@ -869,6 +891,12 @@ N.lifetimeNote = function (model) {
     N.fmtAge(aliveS) + " of container time, so " + N.fmtPct(share, 1) +
     " of what was paid for bought no work at all";
   note += calls ? ", and they served " + calls + " requests." : ".";
+  const cost = N.containerCost(model, functions);
+  if (cost.priced) {
+    note += " Holding them cost " + cost.gbSeconds.toFixed(1) +
+      " GB-seconds of memory, which is the column the idle-timeout table " +
+      "further down is trading cold starts against.";
+  }
   const reaped = lanes.filter(function (r) { return r.reason === "idle"; }).length;
   if (reaped) {
     note += " " + reaped + " " + (reaped === 1 ? "was" : "were") +
@@ -1214,7 +1242,7 @@ if (typeof document !== "undefined" && document.getElementById) {
     }
     svg += "</svg>";
     $("lifetimes").innerHTML = svg;
-    $("lifetimenote").textContent = N.lifetimeNote(model);
+    $("lifetimenote").textContent = N.lifetimeNote(model, functions);
   };
 
   /* -- where a cold start goes --------------------------------------- */
@@ -1550,6 +1578,22 @@ if (typeof document !== "undefined" && document.getElementById) {
       });
       $("replaynext").addEventListener("click", function () {
         goTo(Math.min(session.steps.length - 1, replay.cursor + 1), {});
+      });
+      // A sequence someone is reading through wants the keys they already
+      // reach for. Not while they are in a field: the target cold-start rate
+      // is a number input, and arrows there belong to the input.
+      document.addEventListener("keydown", function (event) {
+        if (event.metaKey || event.ctrlKey || event.altKey) return;
+        const tag = (event.target.tagName || "").toLowerCase();
+        if (tag === "input" || tag === "textarea" || tag === "select") return;
+        if (event.key === "ArrowLeft" && replay.cursor > 0) {
+          goTo(replay.cursor - 1, {});
+        } else if (event.key === "ArrowRight" && replay.cursor < session.steps.length - 1) {
+          goTo(replay.cursor + 1, {});
+        } else {
+          return;
+        }
+        event.preventDefault();
       });
     }
 

@@ -445,6 +445,27 @@ check("only the most recent lanes are drawn, and the note says so", () => {
   assertIncludes(N.lifetimeNote(model), "18 most recent are drawn");
 });
 
+check("what the containers held is priced in the unit the sweep trades in", () => {
+  const model = N.lifetimes(lifetimeState());
+  const functions = [{ name: "hello", memory_mb: 128 }];
+  const cost = N.containerCost(model, functions);
+  assertEqual(cost.priced, 2);
+  // Two containers at 128 MB: one lived 30s from its birth, the other has
+  // been alive since it was born 1.238s before the last thing that happened.
+  assert(cost.gbSeconds > 3.8 && cost.gbSeconds < 4.1, `${cost.gbSeconds} GB-seconds`);
+  assertIncludes(N.lifetimeNote(model, functions), "GB-seconds of memory");
+});
+
+check("an unpriced container is left out rather than guessed at", () => {
+  // A function deleted mid-session has no memory limit to read, and
+  // inventing one would put a made-up number next to measured ones.
+  const cost = N.containerCost(N.lifetimes(lifetimeState()), []);
+  assertEqual(cost.priced, 0);
+  assertEqual(cost.gbSeconds, 0);
+  assert(!N.lifetimeNote(N.lifetimes(lifetimeState())).includes("GB-seconds"),
+    "with nothing to price it, the note says nothing about cost");
+});
+
 check("the lifetime note reports what the starts cost against what was kept", () => {
   const note = N.lifetimeNote(N.lifetimes(lifetimeState()));
   assertIncludes(note, "2 containers have run here");
