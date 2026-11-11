@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import threading
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 
 from nanofaas.functions import FunctionSpec
@@ -97,3 +98,96 @@ class FakeRuntime:
 
     def reap_orphans(self) -> int:
         return 0
+
+
+# -- a platform with no daemon behind it -----------------------------------
+#
+# The console recorder drives the real control plane over HTTP. To exercise
+# that script -- and the replay contract the published page depends on --
+# without a Docker daemon, the same app is wired to a runtime that emulates
+# the example handlers instead of running them. It is a stand-in for the
+# container, so emulating the handler is exactly its job: `fib` has to refuse
+# the argument the real one refuses, or a recording of it proves nothing.
+
+
+class ConsoleRuntime(FakeRuntime):
+    """``FakeRuntime``, but it answers like the example functions do."""
+
+    def invoke(self, instance: Instance, event, timeout_s: float):
+        if self.exec_delay_s:
+            time.sleep(self.exec_delay_s)
+        name = instance.function
+        if name == "fib":
+            n = int(event.get("n", 25))
+            if n > 32:
+                return 500, {
+                    "error": "ValueError: n too large for a demo function",
+                    "traceback": (
+                        'Traceback (most recent call last):\n'
+                        '  File "/app/handler.py", line 4, in handle\n'
+                        "    raise ValueError('n too large for a demo function')\n"
+                        "ValueError: n too large for a demo function"
+                    ),
+                    "exec_ms": 0.4,
+                }
+            a, b = 0, 1
+            for _ in range(n):
+                a, b = b, a + b
+            return 200, {"result": {"n": n, "iterative": a}, "exec_ms": 1.8}
+        return 200, {
+            "result": {"greeting": f"hello {event.get('name', 'world')}"},
+            "exec_ms": 0.3,
+        }
+
+
+@dataclass
+class FakeBuild:
+    tag: str
+    cached: bool = False
+    build_ms: float = 1620.0
+    size_mb: float = 58.4
+
+
+@contextmanager
+def faked_platform(**runtime_kwargs):
+    """Make ``create_app`` come up ready, with no daemon anywhere near it.
+
+    Patches the two module-level functions that reach for Docker and the
+    platform's own ``connect``, then puts them back. Used by the recorder's
+    tests and by nothing that ships.
+    """
+    import importlib
+
+    from nanofaas.pool import Pool, PoolConfig
+
+    # By name: ``nanofaas.api.app`` is also the FastAPI instance the package
+    # re-exports, and `from nanofaas.api import app` hands back that object
+    # rather than the module the patches have to land on.
+    app_module = importlib.import_module("nanofaas.api.app")
+
+    runtime_kwargs.setdefault("start_delay_s", 0.05)
+    built: list[str] = []
+
+    def connect(self) -> None:
+        self.docker = object()
+        self.runtime = ConsoleRuntime(**runtime_kwargs)
+        self.pool = Pool(self.runtime, self.metrics, PoolConfig(max_concurrent_starts=2))
+        self.pool.start_reaper()
+        self.error = None
+
+    def build_image(_client, spec):
+        cached = spec.name in built
+        built.append(spec.name)
+        return FakeBuild(tag=f"nanofaas/{spec.name}:fake", cached=cached)
+
+    originals = (app_module.Platform.connect, app_module.build_image,
+                 app_module.remove_image, app_module.ensure_base_images)
+    app_module.Platform.connect = connect
+    app_module.build_image = build_image
+    app_module.remove_image = lambda *_a, **_k: None
+    app_module.ensure_base_images = lambda *_a, **_k: None
+    try:
+        yield
+    finally:
+        (app_module.Platform.connect, app_module.build_image,
+         app_module.remove_image, app_module.ensure_base_images) = originals
